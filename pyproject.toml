@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "Functions"
+version = "0.1.0"
+description = "Symbolic/numerical function library: 1D, 3D, and discrete functions with NumPy evaluation and SymPy output"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "sympy",
+    "scipy",
+]
+
+[tool.setuptools]
+package-dir = {"Functions" = "."}
+packages = ["Functions"]
