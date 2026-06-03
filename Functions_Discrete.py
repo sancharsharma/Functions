@@ -1,6 +1,5 @@
 import numpy as np
 import sympy as sym
-from abc import abstractmethod
 
 from .Functions_Base import FuncBase, ZeroFunc, ConstFunc, gen_sum, gen_prod
 
@@ -12,24 +11,6 @@ class FuncsDiscrete(FuncBase):
 
     def __init__(self, domain=lambda _: True):
         super().__init__(domain=domain, input_dim=0, output_dim=0)
-
-    @abstractmethod
-    def _eval(self, pos_arr):
-        """pos_arr: (N,) integer array. Return (N,) array."""
-        pass
-
-    @abstractmethod
-    def derivative(self, direction='forward'):
-        """Return a new FuncsDiscrete for the forward (or backward) difference."""
-        pass
-
-    @abstractmethod
-    def sympy_output(self):
-        pass
-
-    @abstractmethod
-    def copy(self):
-        pass
 
 
 class ExpSeq(FuncsDiscrete):

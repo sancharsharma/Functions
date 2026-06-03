@@ -70,7 +70,7 @@ class CoordSystem:
 		return result
 
 	def laplacian(self, f):
-		return self.divergence(self.gradient(f))
+		return self.divergence(self.gradient(f).components)
 
 
 def _cyl_to_cart(pos):
