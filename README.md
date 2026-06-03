@@ -65,7 +65,6 @@ Once installed, open your Python script or Jupyter notebook and import whatever 
 ```python
 from Functions.Functions_1D import ExpFunc, SumOfExps
 ```
-See the Quick start section below for examples.
 
 ## Examples
 
