@@ -202,8 +202,9 @@ class Cylindrical(Funcs3D):
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return Cylindrical(self.kz, self.m_azim, [self.bessel_name, self.order, self.scale], ampl=other*self.ampl, domain=self.domain)
+		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return Cylindrical(self.kz, self.m_azim, [self.bessel_name, self.order, self.scale], ampl=val*self.ampl, domain=self.domain)
 		return super().__mul__(other)
 
 	def __rmul__(self, other):
@@ -279,8 +280,9 @@ class PowerCylindrical(Funcs3D):
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return PowerCylindrical(self.kz, self.m_azim, power=self.power, ampl=other*self.ampl, domain=self.domain)
+		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return PowerCylindrical(self.kz, self.m_azim, power=self.power, ampl=val*self.ampl, domain=self.domain)
 		return super().__mul__(other)
 
 	def __rmul__(self, other):

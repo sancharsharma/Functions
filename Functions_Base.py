@@ -2,27 +2,6 @@ import numpy as np
 from abc import ABC, abstractmethod
 import sympy as sym
 
-_SENTINEL = object()
-
-
-def gen_sum(l, start=None):
-	if start is None:
-		start = 0
-	if len(l) == 0:
-		return start
-	return sum(l[1:], l[0])
-
-
-def gen_prod(l, start=None):
-	if start is None:
-		start = 1
-	if len(l) == 0:
-		return start
-	result = l[0]
-	for item in l[1:]:
-		result = result * item
-	return result
-
 
 class FuncBase(ABC):
 
@@ -33,14 +12,17 @@ class FuncBase(ABC):
 
 	def pos_to_arr(self, pos):
 		d = self.input_dim
-		if d == 0:
+		if d == 0: # Discrete space
 			arr = np.asarray(pos)
 			if not np.issubdtype(arr.dtype, np.integer):
 				raise ValueError(f"input_dim=0 (discrete) requires integer input, got dtype {arr.dtype}")
 			if arr.ndim == 0:  return arr.reshape(1), True
 			if arr.ndim == 1:  return arr, False
 			raise ValueError("Discrete function expects a scalar integer or 1D integer array")
-		pos_arr = np.asarray(pos, dtype=float)
+		pos_arr = np.asarray(pos)
+		if np.issubdtype(pos_arr.dtype, np.complexfloating):
+			raise ValueError(f"Inputs must be real-valued, got dtype {pos_arr.dtype}. Complex inputs are not supported.")
+		pos_arr = pos_arr.astype(float)
 		if d == 1:
 			if pos_arr.ndim == 0:   return pos_arr.reshape(1), True
 			if pos_arr.ndim == 1:   return pos_arr, False
@@ -57,7 +39,17 @@ class FuncBase(ABC):
 	def _eval(self, pos_arr): ...
 
 	@abstractmethod
-	def derivative(self, *args, **kwargs): ...
+	def derivative(self, *args, **kwargs):
+		"""Return a new FuncBase representing the derivative.
+
+		Calling convention depends on the subclass family:
+		  - 1D  (Funcs1D subclasses): no arguments — always w.r.t. the single variable.
+		  - 3D  (Funcs3D subclasses): derivative(coord: str) — coordinate name, e.g. 'rho', 'phi', 'z'.
+		  - Discrete (FuncsDiscrete): derivative(direction='forward') — 'forward', 'backward', or 'central'.
+
+		Combinators (SumOfFuncs, ProdOfFuncs, etc.) forward *args/**kwargs unchanged.
+		"""
+		...
 
 	@abstractmethod
 	def sympy_output(self): ...
@@ -70,14 +62,17 @@ class FuncBase(ABC):
 		if self.input_dim == 1:
 			eps_step = eps
 		else:
-			assert self.input_dim is not None
 			eps_step = np.zeros(self.input_dim)
 			eps_step[coord_index] = eps
 		result = (self(pos_arr + eps_step, ignore_domain=True) - self(pos_arr - eps_step, ignore_domain=True)) / (2 * eps)
 		return result[0] if single_input else result
 
 	def reciprocal(self):
-		raise NotImplementedError(f"{type(self).__name__} does not implement reciprocal()")
+		if self.output_dim is not None and self.output_dim > 1:
+			numer = ConstFunc(np.ones(self.output_dim), input_dim=self.input_dim)
+		else:
+			numer = ConstFunc(1, input_dim=self.input_dim, output_dim=1)
+		return RatioOfFuncs(numer, self, _key=_SENTINEL)
 
 	def gradient(self, coord_sys=None):
 		if coord_sys is None:
@@ -124,7 +119,7 @@ class FuncBase(ABC):
 		if isinstance(other, ZeroFunc):
 			return self
 		if np.isscalar(other):
-			return SumOfFuncs([self, ConstFunc(other, input_dim=self.input_dim)], _key=_SENTINEL)
+			return SumOfFuncs([self, ConstFunc(other, input_dim=self.input_dim, output_dim=1)], _key=_SENTINEL)
 		if isinstance(other, FuncBase):
 			return SumOfFuncs([self, other], _key=_SENTINEL)
 		return NotImplemented
@@ -134,17 +129,32 @@ class FuncBase(ABC):
 
 	def __mul__(self, other):
 		if isinstance(other, ZeroFunc):
-			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim)
-		if isinstance(other, ConstFunc):
-			return other * self
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=other.output_dim or self.output_dim)
 		if isinstance(other, FuncBase):
 			return ProdOfFuncs([self, other], _key=_SENTINEL)
 		if np.isscalar(other):
-			return ProdOfFuncs([ConstFunc(other, input_dim=self.input_dim), self], _key=_SENTINEL)
+			return ProdOfFuncs([ConstFunc(other, input_dim=self.input_dim, output_dim=1), self], _key=_SENTINEL)
+		arr = np.asarray(other)
+		if arr.ndim == 1:
+			if self.output_dim is not None and len(arr) != self.output_dim:
+				raise ValueError(f"Cannot multiply output_dim={self.output_dim} function by length-{len(arr)} array")
+			return ProdOfFuncs([ConstFunc(arr, input_dim=self.input_dim), self], _key=_SENTINEL)
 		return NotImplemented
 
 	def __rmul__(self, other):
 		return self.__mul__(other)
+
+	def __truediv__(self, other):
+		if np.isscalar(other):
+			return self * (1.0 / other)
+		if isinstance(other, FuncBase):
+			return RatioOfFuncs(self, other, _key=_SENTINEL)
+		return NotImplemented
+
+	def __rtruediv__(self, other):
+		if np.isscalar(other):
+			return RatioOfFuncs(ConstFunc(other, input_dim=self.input_dim, output_dim=1), self, _key=_SENTINEL)
+		return NotImplemented
 
 	def __eq__(self, other):
 		if not isinstance(other, FuncBase):
@@ -164,18 +174,25 @@ class FuncBase(ABC):
 #        return str(self.sympy_output())
 
 
-def _check_input_dim_compat(funcs):
-	dims = {f.input_dim for f in funcs if f.input_dim is not None}
-	if len(dims) > 1:
-		raise ValueError(f"Cannot combine functions with different input_dim: {dims}")
-	return next(iter(dims), None)
+def _check_dim_compat(funcs, mode):
+	in_dims = {f.input_dim for f in funcs if f.input_dim is not None}
+	if len(in_dims) > 1:
+		raise ValueError(f"Cannot combine functions with different input_dim: {in_dims}")
+	input_dim = in_dims.pop() if in_dims else None
 
+	out_dims = [f.output_dim for f in funcs]
+	if mode == 'sum':
+		known = {d for d in out_dims if d is not None}
+		if len(known) > 1:
+			raise ValueError(f"incompatible output_dim for addition: {known}")
+		output_dim = known.pop() if known else None
+	else:  # 'mul'
+		known = {d for d in out_dims if d is not None and d != 1}
+		if len(known) > 1:
+			raise ValueError(f"incompatible output_dim for multiplication: {known}")
+		output_dim = known.pop() if known else (1 if 1 in out_dims else None)
 
-def _check_output_dim_compat(funcs):
-	dims = {f.output_dim for f in funcs if f.output_dim is not None}
-	if len(dims) > 1:
-		raise ValueError(f"Cannot combine functions with different output_dim: {dims}")
-	return next(iter(dims), None)
+	return input_dim, output_dim
 
 ######## Some basic functions
 
@@ -185,15 +202,17 @@ class ZeroFunc(FuncBase):
 		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
 
 	def _eval(self, pos_arr):
-		out = self.output_dim or 1
-		return np.zeros((len(pos_arr), out)) if out > 1 else np.zeros(len(pos_arr))
+		return np.zeros((len(pos_arr), self.output_dim)) if self.output_dim > 1 else np.zeros(len(pos_arr))
 
 	def __add__(self, other):
 		if isinstance(other, FuncBase):
-			_check_input_dim_compat([self, other])
+			_check_dim_compat([self, other], 'sum')
 			return other
-		if np.isscalar(other):
-			return ConstFunc(other, input_dim=self.input_dim)
+		if np.isscalar(other) and self.output_dim == 1:
+			return ConstFunc(other, input_dim=self.input_dim, output_dim=1)
+		other_arr = np.asarray(other)
+		if other_arr.ndim == 1 and len(other_arr) == self.output_dim:
+			return ConstFunc(other_arr, input_dim=self.input_dim, output_dim=self.output_dim)
 		return NotImplemented
 
 	def __radd__(self, other):
@@ -201,10 +220,10 @@ class ZeroFunc(FuncBase):
 
 	def __mul__(self, other):
 		if np.isscalar(other):
-			return ZeroFunc(domain=self.domain, input_dim=self.input_dim)
+			return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 		if isinstance(other, FuncBase):
-			_check_input_dim_compat([self, other])
-			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim)
+			input_dim, output_dim = _check_dim_compat([self, other], 'mul')
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
 		return NotImplemented
 
 	def __rmul__(self, other):
@@ -214,32 +233,37 @@ class ZeroFunc(FuncBase):
 		return self
 
 	def sympy_output(self):
+		if self.output_dim > 1:
+			return sym.zeros(self.output_dim, 1)
 		return sym.Integer(0)
 
 	def simplify(self, _deep=False):
 		return self
 
 	def copy(self):
-		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim or 1)
+		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 
 
 class ConstFunc(FuncBase):
 
-	def __new__(cls, const, domain=lambda _: True, input_dim=None):
+	def __new__(cls, const, domain=lambda _: True, input_dim=None, output_dim=None):
 		arr = np.asarray(const)
 		if np.all(arr == 0):
-			return ZeroFunc(domain=domain, input_dim=input_dim, output_dim=int(arr.size) if arr.ndim > 0 else 1)
+			inferred = int(arr.size) if arr.ndim > 0 else 1
+			return ZeroFunc(domain=domain, input_dim=input_dim, output_dim=output_dim if output_dim is not None else inferred)
 		return object.__new__(cls)
 
-	def __init__(self, const, domain=lambda _: True, input_dim=None):
+	def __init__(self, const, domain=lambda _: True, input_dim=None, output_dim=None):
 		arr = np.asarray(const)
 		if arr.ndim == 0:
 			self.const = arr.item()
-			output_dim = 1
+			inferred = 1
 		else:
 			self.const = arr.copy()
-			output_dim = len(arr)
-		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
+			inferred = len(arr)
+		if output_dim is not None and output_dim != inferred:
+			raise ValueError(f"output_dim={output_dim} does not match inferred {inferred} from const shape")
+		super().__init__(domain=domain, input_dim=input_dim, output_dim=inferred)
 
 	def _eval(self, pos_arr):
 		if self.output_dim == 1:
@@ -248,10 +272,10 @@ class ConstFunc(FuncBase):
 
 	def __add__(self, other):
 		if isinstance(other, ConstFunc):
-			_check_input_dim_compat([self, other])
-			return ConstFunc(self.const + other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim)
+			input_dim, _ = _check_dim_compat([self, other], 'sum')
+			return ConstFunc(self.const + other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=self.output_dim)
 		if np.isscalar(other) and self.output_dim == 1:
-			return ConstFunc(self.const + other, input_dim=self.input_dim)
+			return ConstFunc(self.const + other, input_dim=self.input_dim, output_dim=1)
 		return NotImplemented
 
 	def __radd__(self, other):
@@ -259,13 +283,13 @@ class ConstFunc(FuncBase):
 
 	def __mul__(self, other):
 		if np.isscalar(other):
-			return ConstFunc(other * self.const, domain=self.domain, input_dim=self.input_dim)
+			return ConstFunc(other * self.const, domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 		if isinstance(other, ConstFunc):
-			_check_input_dim_compat([self, other])
-			return ConstFunc(self.const * other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim)
-		if isinstance(other, FuncBase) and self.output_dim == 1:
-			_check_input_dim_compat([self, other])
-			result = type(other).__mul__(other, self.const)
+			input_dim, output_dim = _check_dim_compat([self, other], 'mul')
+			return ConstFunc(self.const * other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
+		if isinstance(other, FuncBase):
+			_check_dim_compat([self, other], 'mul')
+			result = type(other).__mul__(other, self)
 			if result is not NotImplemented:
 				return result
 			return ProdOfFuncs([self, other], _key=_SENTINEL)
@@ -275,12 +299,10 @@ class ConstFunc(FuncBase):
 		return self.__mul__(other)
 
 	def reciprocal(self):
-		if (self.output_dim or 0) > 1:
-			raise NotImplementedError("reciprocal() is not defined for a vector ConstFunc")
-		return ConstFunc(1 / self.const, domain=self.domain, input_dim=self.input_dim)
+		return ConstFunc(1 / self.const, domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 
 	def derivative(self, *args, **kwargs):
-		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim or 1)
+		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 
 	def sympy_output(self):
 		if self.output_dim == 1:
@@ -288,9 +310,11 @@ class ConstFunc(FuncBase):
 		return sym.Matrix(self.const.tolist())
 
 	def copy(self):
-		return ConstFunc(self.const, domain=self.domain, input_dim=self.input_dim)
+		return ConstFunc(self.const, domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 
 ######### Different ways to combine functions
+
+_SENTINEL = object() # Used to control internal constructor behavior of these functions
 
 class SumOfFuncs(FuncBase):
 	# gradient()/laplacian() without an explicit coord_sys will raise ValueError here since SumOfFuncs
@@ -307,8 +331,7 @@ class SumOfFuncs(FuncBase):
 		return object.__new__(cls)
 
 	def __init__(self, funcs, _key=None):
-		input_dim = _check_input_dim_compat(funcs)
-		output_dim = _check_output_dim_compat(funcs)
+		input_dim, output_dim = _check_dim_compat(funcs, 'sum')
 		domain = lambda pos: all(f.domain(pos) for f in funcs)
 		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
 		self.funcs = list(funcs)
@@ -333,11 +356,10 @@ class SumOfFuncs(FuncBase):
 
 	def __mul__(self, other):
 		if isinstance(other, ZeroFunc):
-			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim)
-		if isinstance(other, ConstFunc):
-			return other * self
-		if np.isscalar(other):
-			return SumOfFuncs([other * f for f in self.funcs], _key=_SENTINEL)
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=other.output_dim or self.output_dim)
+		if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return SumOfFuncs([val * f for f in self.funcs], _key=_SENTINEL)
 		if isinstance(other, FuncBase):
 			return ProdOfFuncs([self, other], _key=_SENTINEL)
 		return NotImplemented
@@ -394,8 +416,7 @@ class ProdOfFuncs(FuncBase):
 		return object.__new__(cls)
 
 	def __init__(self, funcs, _key=None):
-		input_dim = _check_input_dim_compat(funcs)
-		output_dim = _check_output_dim_compat(funcs)
+		input_dim, output_dim = _check_dim_compat(funcs, 'mul')
 		domain = lambda pos: all(f.domain(pos) for f in funcs)
 		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
 		self.funcs = list(funcs)
@@ -418,8 +439,9 @@ class ProdOfFuncs(FuncBase):
 		return gen_sum(terms)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return ProdOfFuncs([other * self.funcs[0]] + self.funcs[1:], _key=_SENTINEL)
+		if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return ProdOfFuncs([val * self.funcs[0]] + self.funcs[1:], _key=_SENTINEL)
 		if isinstance(other, ProdOfFuncs):
 			return ProdOfFuncs(self.funcs + other.funcs, _key=_SENTINEL)
 		if isinstance(other, FuncBase):
@@ -465,6 +487,54 @@ class ProdOfFuncs(FuncBase):
 		return gen_prod([f.sympy_output() for f in self.funcs])
 
 
+class RatioOfFuncs(FuncBase):
+
+	def __new__(cls, numer, denom, _key=None):
+		if _key is not _SENTINEL:
+			raise TypeError("RatioOfFuncs is internal — combine functions with / instead.")
+		if isinstance(numer, ZeroFunc):
+			return ZeroFunc(domain=lambda pos: numer.domain(pos) and denom.domain(pos),
+							input_dim=numer.input_dim, output_dim=numer.output_dim)
+		if isinstance(denom, ZeroFunc):
+			raise ZeroDivisionError("Cannot divide by ZeroFunc")
+		if isinstance(denom, ConstFunc):
+			return (1.0 / denom.const) * numer
+		return object.__new__(cls)
+
+	def __init__(self, numer, denom, _key=None):
+		input_dim, output_dim = _check_dim_compat([numer, denom], 'mul')
+		domain = lambda pos: numer.domain(pos) and denom.domain(pos)
+		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
+		self.numer = numer
+		self.denom = denom
+
+	def _eval(self, pos_arr):
+		n = self.numer._eval(pos_arr)
+		d = self.denom._eval(pos_arr)
+		if n.ndim == 1 and d.ndim == 2:
+			n = n[:, np.newaxis]
+		elif n.ndim == 2 and d.ndim == 1:
+			d = d[:, np.newaxis]
+		return n / d
+
+	def derivative(self, *args, **kwargs):
+		f, g = self.numer, self.denom
+		return RatioOfFuncs(
+			f.derivative(*args, **kwargs) * g - f * g.derivative(*args, **kwargs),
+			ProdOfFuncs([g, g], _key=_SENTINEL),
+			_key=_SENTINEL,
+		)
+
+	def reciprocal(self):
+		return RatioOfFuncs(self.denom, self.numer, _key=_SENTINEL)
+
+	def sympy_output(self):
+		return self.numer.sympy_output() / self.denom.sympy_output()
+
+	def copy(self):
+		return RatioOfFuncs(self.numer.copy(), self.denom.copy(), _key=_SENTINEL)
+
+
 class ComposedFunc(FuncBase):
 
 	def __new__(cls, outer, inner):
@@ -472,13 +542,13 @@ class ComposedFunc(FuncBase):
 			raise ValueError(f"ComposedFunc: inner.output_dim={inner.output_dim} does not match outer.input_dim={outer.input_dim}")
 		composed_domain = lambda pos: inner.domain(pos) and outer.domain(inner(pos, ignore_domain=True))
 		if isinstance(outer, ZeroFunc):
-			return ZeroFunc(domain=composed_domain, input_dim=inner.input_dim)
+			return ZeroFunc(domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
 		if isinstance(outer, ConstFunc):
-			return ConstFunc(outer.const, domain=composed_domain, input_dim=inner.input_dim)
+			return ConstFunc(outer.const, domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
 		if isinstance(inner, ZeroFunc) and inner.output_dim == 1:
-			return ConstFunc(outer(0.0, ignore_domain=True), domain=composed_domain, input_dim=inner.input_dim)
+			return ConstFunc(outer(0.0, ignore_domain=True), domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
 		if isinstance(inner, ConstFunc) and inner.output_dim == 1:
-			return ConstFunc(outer(inner.const, ignore_domain=True), domain=composed_domain, input_dim=inner.input_dim)
+			return ConstFunc(outer(inner.const, ignore_domain=True), domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
 		return object.__new__(cls)
 
 	def __init__(self, outer, inner):
@@ -505,10 +575,10 @@ class ComposedFunc(FuncBase):
 
 class VecFunc(FuncBase):
 	def __init__(self, components):
-		input_dim = _check_input_dim_compat(components)
+		input_dim, _ = _check_dim_compat([*components, ConstFunc(1)], 'sum')
 		super().__init__(domain=lambda pos: all(f.domain(pos) for f in components),
 						 input_dim=input_dim, output_dim=len(components))
-		self.components = list(components)
+		self.components = list(components) # TODO: I always have word wrap on, so these line breaks are unnecessary.
 
 	def _eval(self, pos_arr):
 		return np.stack([f._eval(pos_arr) for f in self.components], axis=1)  # (N, k)
@@ -522,6 +592,35 @@ class VecFunc(FuncBase):
 	def copy(self):
 		return VecFunc([f.copy() for f in self.components])
 
+	def __add__(self, other):
+		if isinstance(other, ZeroFunc):
+			_check_dim_compat([self, other], 'sum')
+			return self
+		if isinstance(other, VecFunc):
+			if len(self.components) != len(other.components):
+				raise ValueError(f"Cannot add VecFuncs with different lengths: {len(self.components)} vs {len(other.components)}")
+			return VecFunc([f + g for f, g in zip(self.components, other.components)])
+		return super().__add__(other)
+
+	def __mul__(self, other):
+		if isinstance(other, ZeroFunc):
+			input_dim, output_dim = _check_dim_compat([self, other], 'mul')
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
+		if np.isscalar(other):
+			return VecFunc([other * f for f in self.components])
+		arr = np.asarray(other)
+		if arr.ndim == 1:
+			if len(arr) != len(self.components):
+				raise ValueError(f"Cannot multiply VecFunc({len(self.components)}) by length-{len(arr)} array")
+			return VecFunc([c * f for c, f in zip(arr, self.components)])
+		if isinstance(other, VecFunc):
+			if len(self.components) != len(other.components):
+				raise ValueError(f"Cannot multiply VecFuncs with different lengths: {len(self.components)} vs {len(other.components)}")
+			return VecFunc([f * g for f, g in zip(self.components, other.components)])
+		if isinstance(other, FuncBase) and (other.output_dim is None or other.output_dim == 1):
+			return VecFunc([other * f for f in self.components])
+		return NotImplemented
+
 	def __getitem__(self, i):
 		return self.components[i]
 
@@ -531,7 +630,7 @@ class CoordPow(FuncBase):
 
 	def __new__(cls, input_dim, coord_index, power=1, coord_name=None, domain=lambda _: True):
 		if power == 0:
-			return ConstFunc(1, domain=domain, input_dim=input_dim)
+			return ConstFunc(1, domain=domain, input_dim=input_dim, output_dim=1)
 		return object.__new__(cls)
 
 	def __init__(self, input_dim, coord_index, power=1, coord_name=None, domain=lambda _: True):
@@ -547,7 +646,7 @@ class CoordPow(FuncBase):
 	def derivative(self, coord, *args, **kwargs):
 		if coord == self.coord_name:
 			return self.power * CoordPow(self.input_dim, self.coord_index, self.power - 1, self.coord_name, self.domain)
-		return ZeroFunc(domain=self.domain, input_dim=self.input_dim)
+		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=1)
 
 	def reciprocal(self):
 		return CoordPow(self.input_dim, self.coord_index, -self.power, self.coord_name, self.domain)
@@ -582,11 +681,11 @@ class TrigCoord(FuncBase):
 
 	def derivative(self, coord, *args, **kwargs):
 		if coord != self.coord_name:
-			return ZeroFunc(domain=self.domain, input_dim=self.input_dim)
+			return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=1)
 		t = lambda f: TrigCoord(f, self.input_dim, self.coord_index, self.coord_name, self.domain)
 		if self.func == 'sin': return t('cos')
-		if self.func == 'cos': return ConstFunc(-1, input_dim=self.input_dim) * t('sin')
-		if self.func == 'csc': return ConstFunc(-1, input_dim=self.input_dim) * t('csc') * t('csc') * t('cos')
+		if self.func == 'cos': return ConstFunc(-1, input_dim=self.input_dim, output_dim=1) * t('sin')
+		if self.func == 'csc': return ConstFunc(-1, input_dim=self.input_dim, output_dim=1) * t('csc') * t('csc') * t('cos')
 		if self.func == 'sec': return t('sec') * t('sec') * t('sin')
 		raise AssertionError(f"Unreachable: unknown func {self.func!r}")
 
@@ -603,3 +702,22 @@ class TrigCoord(FuncBase):
 
 	def copy(self):
 		return TrigCoord(self.func, self.input_dim, self.coord_index, self.coord_name, self.domain)
+
+# Helper functions
+def gen_sum(l, start=None):
+	if start is None:
+		start = 0
+	if len(l) == 0:
+		return start
+	return sum(l[1:], l[0])
+
+
+def gen_prod(l, start=None):
+	if start is None:
+		start = 1
+	if len(l) == 0:
+		return start
+	result = l[0]
+	for item in l[1:]:
+		result = result * item
+	return result

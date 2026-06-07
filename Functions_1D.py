@@ -66,8 +66,9 @@ class ExpFunc(Funcs1D):
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return ExpFunc(self.k, ampl=other * self.ampl, shift=self.shift, domain=self.domain)
+		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return ExpFunc(self.k, ampl=val * self.ampl, shift=self.shift, domain=self.domain)
 		return super().__mul__(other)
 
 	def copy(self):
@@ -105,8 +106,9 @@ class PowFunc(Funcs1D):
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return PowFunc(self.power, ampl=other * self.ampl, domain=self.domain)
+		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return PowFunc(self.power, ampl=val * self.ampl, domain=self.domain)
 		if isinstance(other, PowFunc):
 			domain = lambda pos: self.domain(pos) and other.domain(pos)
 			return PowFunc(self.power + other.power, ampl=self.ampl * other.ampl, domain=domain)
@@ -166,8 +168,9 @@ class PolyFunc(Funcs1D):
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other):
-			return PolyFunc(other * self.coeffs, domain=self.domain)
+		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
+			return PolyFunc(val * self.coeffs, domain=self.domain)
 		if isinstance(other, PolyFunc):
 			return PolyFunc(np.convolve(self.coeffs, other.coeffs), domain=lambda pos: self.domain(pos) and other.domain(pos))
 		if isinstance(other, PowFunc) and other.power >= 0 and int(other.power) == other.power:
@@ -273,9 +276,10 @@ class SumOfExps(Funcs1D):
 			domain = lambda pos: self.domain(pos) and other.domain(pos)
 			return SumOfExps(coeffs=coeff_tot.ravel(), exponents=exp_tot.ravel(),
 			                 shifts=shift_tot.ravel(), domain=domain).simplify()
-		elif np.isscalar(other):
+		elif np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
+			val = other if np.isscalar(other) else other.const
 			mul_res = self.copy()
-			mul_res.coeffs = other * self.coeffs
+			mul_res.coeffs = val * self.coeffs
 			return mul_res
 		else:
 			return super().__mul__(other)

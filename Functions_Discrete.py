@@ -1,7 +1,7 @@
 import numpy as np
 import sympy as sym
 
-from .Functions_Base import FuncBase, ZeroFunc, ConstFunc, gen_sum, gen_prod
+from .Functions_Base import FuncBase, ZeroFunc, ConstFunc, gen_sum
 
 
 class FuncsDiscrete(FuncBase):
@@ -18,7 +18,7 @@ class ExpSeq(FuncsDiscrete):
 
     def __new__(cls, base, ampl=1, domain=lambda _: True):
         if ampl == 0:
-            return ZeroFunc(domain=domain, input_dim=0)
+            return ZeroFunc(domain=domain, input_dim=0, output_dim=0)
         if base == 0:
             raise ValueError("base=0 is degenerate (0**0 undefined); use TabFunc instead")
         if base == 1:
@@ -50,8 +50,9 @@ class ExpSeq(FuncsDiscrete):
         return self.__add__(other)
 
     def __mul__(self, other):
-        if np.isscalar(other):
-            return ExpSeq(self.base, ampl=other * self.ampl, domain=self.domain)
+        if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
+            val = other if np.isscalar(other) else other.const
+            return ExpSeq(self.base, ampl=val * self.ampl, domain=self.domain)
         if isinstance(other, ExpSeq):
             return ExpSeq(self.base * other.base, ampl=self.ampl * other.ampl,
                           domain=lambda p: self.domain(p) and other.domain(p))
@@ -73,7 +74,7 @@ class PolySeq(FuncsDiscrete):
 
     def __new__(cls, coeffs, domain=lambda _: True):
         if np.all(np.asarray(coeffs) == 0):
-            return ZeroFunc(domain=domain, input_dim=0)
+            return ZeroFunc(domain=domain, input_dim=0, output_dim=0)
         return object.__new__(cls)
 
     def __init__(self, coeffs, domain=lambda _: True):
@@ -93,7 +94,7 @@ class PolySeq(FuncsDiscrete):
         shift = +1 if direction == 'forward' else -1
         diff_expr = sym.expand(expr.subs(n, n + shift) - expr)
         if diff_expr == 0:
-            return ZeroFunc(domain=self.domain, input_dim=0)
+            return ZeroFunc(domain=self.domain, input_dim=0, output_dim=0)
         poly = sym.Poly(diff_expr, n)
         coeffs = [float(c) for c in reversed(poly.all_coeffs())]
         return PolySeq(coeffs, domain=self.domain)
@@ -110,8 +111,9 @@ class PolySeq(FuncsDiscrete):
         return self.__add__(other)
 
     def __mul__(self, other):
-        if np.isscalar(other):
-            return PolySeq(other * self.coeffs, domain=self.domain)
+        if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
+            val = other if np.isscalar(other) else other.const
+            return PolySeq(val * self.coeffs, domain=self.domain)
         if isinstance(other, PolySeq):
             return PolySeq(np.convolve(self.coeffs, other.coeffs),
                            domain=lambda p: self.domain(p) and other.domain(p))
@@ -172,9 +174,10 @@ class TabFunc(FuncsDiscrete):
         return self.__add__(other)
 
     def __mul__(self, other):
-        if np.isscalar(other):
-            return TabFunc({k: other * v for k, v in self._table.items()},
-                           default=other * self.default, domain=self.domain)
+        if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
+            val = other if np.isscalar(other) else other.const
+            return TabFunc({k: val * v for k, v in self._table.items()},
+                           default=val * self.default, domain=self.domain)
         return super().__mul__(other)
 
     def __rmul__(self, other):
