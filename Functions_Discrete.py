@@ -12,6 +12,12 @@ class FuncsDiscrete(FuncBase):
     def __init__(self, domain=lambda _: True):
         super().__init__(domain=domain, input_dim=0, output_dim=0)
 
+    def integrate(self, a=None, b=None):
+        raise NotImplementedError(
+            "integrate() is not defined for discrete (integer-domain) functions; "
+            "use sum() or numpy summation instead"
+        )
+
 
 class ExpSeq(FuncsDiscrete):
     """Geometric sequence: ampl * base**n."""
@@ -158,8 +164,7 @@ class TabFunc(FuncsDiscrete):
         else:
             raise ValueError(f"direction must be 'forward' or 'backward', got {direction!r}")
         new = {k: v for k, v in new.items() if v != 0}
-        new_default = self.default - self.default
-        return TabFunc(new, default=new_default, domain=self.domain)
+        return TabFunc(new, default=0.0, domain=self.domain)
 
     def __add__(self, other):
         if isinstance(other, TabFunc):

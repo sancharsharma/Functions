@@ -1,5 +1,18 @@
 import numpy as np
+import functools
 from . import Functions_Base as _base
+
+
+def _coord_transform(func):
+	"""Wrap an (N, d) → (N, d) coordinate transform so it also accepts a single (d,) vector."""
+	@functools.wraps(func)
+	def wrapper(pos):
+		pos = np.asarray(pos, dtype=float)
+		batch = pos.ndim == 2
+		p = pos if batch else pos[np.newaxis, :]
+		result = func(p)
+		return result if batch else result[0]
+	return wrapper
 
 
 class CoordPoint:
@@ -73,62 +86,44 @@ class CoordSystem:
 		return self.divergence(self.gradient(f).components)
 
 
+@_coord_transform
 def _cyl_to_cart(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	rho, phi, z = p[:, 0], p[:, 1], p[:, 2]
-	cart = np.stack([rho * np.cos(phi), rho * np.sin(phi), z], axis=1)
-	return cart if batch else cart[0]
+	rho, phi, z = pos[:, 0], pos[:, 1], pos[:, 2]
+	return np.stack([rho * np.cos(phi), rho * np.sin(phi), z], axis=1)
 
 
+@_coord_transform
 def _cart_to_cyl(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	x, y, z = p[:, 0], p[:, 1], p[:, 2]
-	cyl = np.stack([np.sqrt(x**2 + y**2), np.arctan2(y, x), z], axis=1)
-	return cyl if batch else cyl[0]
+	x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
+	return np.stack([np.sqrt(x**2 + y**2), np.arctan2(y, x), z], axis=1)
 
 
+@_coord_transform
 def _polar_to_cart(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	r, phi = p[:, 0], p[:, 1]
-	cart = np.stack([r * np.cos(phi), r * np.sin(phi)], axis=1)
-	return cart if batch else cart[0]
+	r, phi = pos[:, 0], pos[:, 1]
+	return np.stack([r * np.cos(phi), r * np.sin(phi)], axis=1)
 
 
+@_coord_transform
 def _cart_to_polar(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	x, y = p[:, 0], p[:, 1]
-	polar = np.stack([np.sqrt(x**2 + y**2), np.arctan2(y, x)], axis=1)
-	return polar if batch else polar[0]
+	x, y = pos[:, 0], pos[:, 1]
+	return np.stack([np.sqrt(x**2 + y**2), np.arctan2(y, x)], axis=1)
 
 
+@_coord_transform
 def _sph_to_cart(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	r, theta, phi = p[:, 0], p[:, 1], p[:, 2]
+	r, theta, phi = pos[:, 0], pos[:, 1], pos[:, 2]
 	st = np.sin(theta)
-	cart = np.stack([r*st*np.cos(phi), r*st*np.sin(phi), r*np.cos(theta)], axis=1)
-	return cart if batch else cart[0]
+	return np.stack([r*st*np.cos(phi), r*st*np.sin(phi), r*np.cos(theta)], axis=1)
 
 
+@_coord_transform
 def _cart_to_sph(pos):
-	pos = np.asarray(pos, dtype=float)
-	batch = pos.ndim == 2
-	p = pos if batch else pos[np.newaxis, :]
-	x, y, z = p[:, 0], p[:, 1], p[:, 2]
+	x, y, z = pos[:, 0], pos[:, 1], pos[:, 2]
 	r = np.sqrt(x**2 + y**2 + z**2)
 	theta = np.arccos(np.clip(z / r, -1.0, 1.0))
 	phi = np.arctan2(y, x)
-	sph = np.stack([r, theta, phi], axis=1)
-	return sph if batch else sph[0]
+	return np.stack([r, theta, phi], axis=1)
 
 
 Cartesian2D = CoordSystem(

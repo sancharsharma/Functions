@@ -57,7 +57,16 @@ class FuncBase(ABC):
 	@abstractmethod
 	def copy(self): ...
 
+	def __repr__(self):
+		return (f"<{type(self).__name__}>"
+				" (call .sympy_output() for a symbolic representation — may be slow for large expressions)")
+
 	def numerical_derivative(self, pos, coord_index=0, eps=1e-5):
+		if self.input_dim == 0:
+			raise TypeError(
+				"numerical_derivative is not defined for discrete (input_dim=0) functions; "
+				"use .derivative(direction='forward'/'backward') instead."
+			)
 		pos_arr, single_input = self.pos_to_arr(pos)
 		if self.input_dim == 1:
 			eps_step = eps
@@ -88,15 +97,46 @@ class FuncBase(ABC):
 			raise ValueError(f"laplacian() requires coord_sys for {type(self).__name__}, which has no natural coordinate system")
 		return coord_sys.laplacian(self)
 
+	def numerical_integrate(self, a, b):
+		from scipy.integrate import quad
+		if self.input_dim is not None and self.input_dim != 1:
+			raise NotImplementedError(
+				f"numerical_integrate() is not supported for functions with input_dim={self.input_dim}; "
+				"only 1D scalar functions support numerical integration"
+			)
+		if self.output_dim is not None and self.output_dim != 1:
+			raise NotImplementedError(
+				f"numerical_integrate() is not supported for vector-valued functions (output_dim={self.output_dim})"
+			)
+		result, _ = quad(lambda x: float(self(x, ignore_domain=True)), a, b)
+		return result
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			raise NotImplementedError(
+				f"{type(self).__name__} does not implement indefinite integration; "
+				"call integrate(a, b) for a definite integral"
+			)
+		if a is not None and b is not None:
+			try:
+				F = self.integrate()
+				return F(b, ignore_domain=True) - F(a, ignore_domain=True)
+			except NotImplementedError:
+				return self.numerical_integrate(a, b)
+		raise ValueError(
+			"integrate() takes either no positional arguments (indefinite) "
+			"or exactly two (definite interval [a, b])"
+		)
+
 	def __call__(self, pos, ignore_domain=False):
-		if not ignore_domain:
-			self.check_domain(pos)
 		pos_arr, single_input = self.pos_to_arr(pos)
+		if not ignore_domain:
+			self._check_domain(pos_arr)
 		result = self._eval(pos_arr)
 		return result[0] if single_input else result
 
-	def check_domain(self, pos, output='error'):
-		pos_arr, _ = self.pos_to_arr(pos)
+	def _check_domain(self, pos_arr, output='error'):
+		"""Domain check on an already-normalised pos_arr (N, d) or (N,) array."""
 		try:
 			bad_points = [p for p in pos_arr if not self.domain(p)]
 		except Exception as e:
@@ -108,6 +148,11 @@ class FuncBase(ABC):
 		elif output == 'error':
 			if bad_points:
 				raise ValueError("There are points outside domain. Call with ignore_domain=True to bypass, or use check_domain(pos, output='points') to inspect.")
+
+	def check_domain(self, pos, output='error'):
+		"""Public domain check; accepts raw user input (scalar, array, etc.)."""
+		pos_arr, _ = self.pos_to_arr(pos)
+		return self._check_domain(pos_arr, output)
 
 	def __neg__(self):
 		return (-1) * self
@@ -129,7 +174,8 @@ class FuncBase(ABC):
 
 	def __mul__(self, other):
 		if isinstance(other, ZeroFunc):
-			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=other.output_dim or self.output_dim)
+			od = next((d for d in (other.output_dim, self.output_dim) if d is not None), 1)
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=od)
 		if isinstance(other, FuncBase):
 			return ProdOfFuncs([self, other], _key=_SENTINEL)
 		if np.isscalar(other):
@@ -198,6 +244,14 @@ def _check_dim_compat(funcs, mode):
 
 class ZeroFunc(FuncBase):
 
+	def __new__(cls, domain=lambda _: True, input_dim=None, output_dim=1):
+		if output_dim is None:
+			raise ValueError(
+				"ZeroFunc requires an explicit output_dim; None is ambiguous. "
+				"Use output_dim=1 for a scalar zero, or output_dim=k for a vector zero of length k."
+			)
+		return object.__new__(cls)
+
 	def __init__(self, domain=lambda _: True, input_dim=None, output_dim=1):
 		super().__init__(domain=domain, input_dim=input_dim, output_dim=output_dim)
 
@@ -223,6 +277,8 @@ class ZeroFunc(FuncBase):
 			return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
 		if isinstance(other, FuncBase):
 			input_dim, output_dim = _check_dim_compat([self, other], 'mul')
+			if output_dim is None:
+				output_dim = 1
 			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
 		return NotImplemented
 
@@ -231,6 +287,11 @@ class ZeroFunc(FuncBase):
 
 	def derivative(self, *_args, **_kwargs):
 		return self
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			return self.copy()
+		return super().integrate(a, b)
 
 	def sympy_output(self):
 		if self.output_dim > 1:
@@ -276,7 +337,7 @@ class ConstFunc(FuncBase):
 			return ConstFunc(self.const + other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=self.output_dim)
 		if np.isscalar(other) and self.output_dim == 1:
 			return ConstFunc(self.const + other, input_dim=self.input_dim, output_dim=1)
-		return NotImplemented
+		return super().__add__(other)
 
 	def __radd__(self, other):
 		return self.__add__(other)
@@ -289,7 +350,7 @@ class ConstFunc(FuncBase):
 			return ConstFunc(self.const * other.const, domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
 		if isinstance(other, FuncBase):
 			_check_dim_compat([self, other], 'mul')
-			result = type(other).__mul__(other, self)
+			result = other.__mul__(self)
 			if result is not NotImplemented:
 				return result
 			return ProdOfFuncs([self, other], _key=_SENTINEL)
@@ -303,6 +364,17 @@ class ConstFunc(FuncBase):
 
 	def derivative(self, *args, **kwargs):
 		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=self.output_dim)
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			if self.output_dim != 1:
+				raise NotImplementedError(
+					f"indefinite integration of vector ConstFunc (output_dim={self.output_dim}) is not supported"
+				)
+			return self.const * CoordPow(self.input_dim or 1, 0, 1, coord_name='x')
+		if self.output_dim != 1:
+			return super().integrate(a, b)
+		return self.const * (b - a)
 
 	def sympy_output(self):
 		if self.output_dim == 1:
@@ -346,9 +418,8 @@ class SumOfFuncs(FuncBase):
 		if isinstance(other, ZeroFunc):
 			return self
 		if isinstance(other, FuncBase):
-			if isinstance(other, SumOfFuncs):
-				return SumOfFuncs(self.funcs + other.funcs, _key=_SENTINEL)
-			return SumOfFuncs(self.funcs + [other], _key=_SENTINEL)
+			extra = other.funcs if isinstance(other, SumOfFuncs) else [other]
+			return SumOfFuncs(self.funcs + extra, _key=_SENTINEL)
 		return super().__add__(other)
 
 	def __radd__(self, other):
@@ -356,7 +427,8 @@ class SumOfFuncs(FuncBase):
 
 	def __mul__(self, other):
 		if isinstance(other, ZeroFunc):
-			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=other.output_dim or self.output_dim)
+			od = next((d for d in (other.output_dim, self.output_dim) if d is not None), 1)
+			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=self.input_dim, output_dim=od)
 		if np.isscalar(other) or (isinstance(other, ConstFunc) and other.output_dim == 1):
 			val = other if np.isscalar(other) else other.const
 			return SumOfFuncs([val * f for f in self.funcs], _key=_SENTINEL)
@@ -393,6 +465,11 @@ class SumOfFuncs(FuncBase):
 		if any(r is NotImplemented for r in results):
 			return NotImplemented
 		return gen_sum(results)
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			return gen_sum([f.integrate() for f in self.funcs])
+		return sum(f.integrate(a, b) for f in self.funcs)
 
 	def copy(self):
 		return SumOfFuncs([f.copy() for f in self.funcs], _key=_SENTINEL)
@@ -493,8 +570,9 @@ class RatioOfFuncs(FuncBase):
 		if _key is not _SENTINEL:
 			raise TypeError("RatioOfFuncs is internal — combine functions with / instead.")
 		if isinstance(numer, ZeroFunc):
+			od = numer.output_dim if numer.output_dim is not None else 1
 			return ZeroFunc(domain=lambda pos: numer.domain(pos) and denom.domain(pos),
-							input_dim=numer.input_dim, output_dim=numer.output_dim)
+							input_dim=numer.input_dim, output_dim=od)
 		if isinstance(denom, ZeroFunc):
 			raise ZeroDivisionError("Cannot divide by ZeroFunc")
 		if isinstance(denom, ConstFunc):
@@ -542,7 +620,8 @@ class ComposedFunc(FuncBase):
 			raise ValueError(f"ComposedFunc: inner.output_dim={inner.output_dim} does not match outer.input_dim={outer.input_dim}")
 		composed_domain = lambda pos: inner.domain(pos) and outer.domain(inner(pos, ignore_domain=True))
 		if isinstance(outer, ZeroFunc):
-			return ZeroFunc(domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
+			od = outer.output_dim if outer.output_dim is not None else 1
+			return ZeroFunc(domain=composed_domain, input_dim=inner.input_dim, output_dim=od)
 		if isinstance(outer, ConstFunc):
 			return ConstFunc(outer.const, domain=composed_domain, input_dim=inner.input_dim, output_dim=outer.output_dim)
 		if isinstance(inner, ZeroFunc) and inner.output_dim == 1:
@@ -605,24 +684,29 @@ class VecFunc(FuncBase):
 	def __mul__(self, other):
 		if isinstance(other, ZeroFunc):
 			input_dim, output_dim = _check_dim_compat([self, other], 'mul')
+			if output_dim is None:
+				output_dim = 1
 			return ZeroFunc(domain=lambda pos: self.domain(pos) and other.domain(pos), input_dim=input_dim, output_dim=output_dim)
 		if np.isscalar(other):
 			return VecFunc([other * f for f in self.components])
-		arr = np.asarray(other)
-		if arr.ndim == 1:
-			if len(arr) != len(self.components):
-				raise ValueError(f"Cannot multiply VecFunc({len(self.components)}) by length-{len(arr)} array")
-			return VecFunc([c * f for c, f in zip(arr, self.components)])
 		if isinstance(other, VecFunc):
 			if len(self.components) != len(other.components):
 				raise ValueError(f"Cannot multiply VecFuncs with different lengths: {len(self.components)} vs {len(other.components)}")
 			return VecFunc([f * g for f, g in zip(self.components, other.components)])
 		if isinstance(other, FuncBase) and (other.output_dim is None or other.output_dim == 1):
 			return VecFunc([other * f for f in self.components])
+		arr = np.asarray(other)
+		if arr.ndim == 1:
+			if len(arr) != len(self.components):
+				raise ValueError(f"Cannot multiply VecFunc({len(self.components)}) by length-{len(arr)} array")
+			return VecFunc([c * f for c, f in zip(arr, self.components)])
 		return NotImplemented
 
 	def __getitem__(self, i):
 		return self.components[i]
+
+	def simplify(self, deep=False):
+		return VecFunc([f.simplify(deep=deep) if hasattr(f, 'simplify') else f for f in self.components])
 
 ######### Coordinate transformation functions
 class CoordPow(FuncBase):

@@ -1,5 +1,5 @@
 import numpy as np
-from abc import abstractmethod
+from abc import abstractmethod, ABCMeta
 import scipy.special as spec
 import sympy as sym
 from . import Functions_Base as _base
@@ -9,8 +9,18 @@ import sympy.functions.special.bessel as bessel
 _KNOWN_COORDS = frozenset({'x', 'y', 'z', 'rho', 'phi', 'r', 'theta'})
 
 
+class _Funcs3DMeta(ABCMeta):
+	"""Metaclass that prevents reassigning coord_sys on a class after it has been set."""
+	def __setattr__(cls, name, value):
+		if name == 'coord_sys' and 'coord_sys' in cls.__dict__:
+			raise AttributeError(
+				f"coord_sys is a class-level constant on {cls.__name__} and cannot be reassigned"
+			)
+		super().__setattr__(name, value)
+
+
 ################
-class Funcs3D(_base.FuncBase):
+class Funcs3D(_base.FuncBase, metaclass=_Funcs3DMeta):
 
 	def __init__(self, domain=lambda pos: True, output_dim=1):
 		super().__init__(domain=domain, input_dim=3, output_dim=output_dim)
@@ -20,13 +30,23 @@ class Funcs3D(_base.FuncBase):
 			raise AttributeError("coord_sys is a class-level constant and cannot be set on instances")
 		super().__setattr__(name, value)
 
-	# TODO: A list of coordinate points will not work here.
 	def __call__(self, pos, ignore_domain=False):
 		if isinstance(pos, CoordPoint):
 			func_coord_sys = getattr(self, 'coord_sys', None)
 			if func_coord_sys is not None and pos.coord_sys is not func_coord_sys:
 				pos = pos.convert_to(func_coord_sys)
 			pos = pos.pos
+		elif isinstance(pos, list) and pos and isinstance(pos[0], CoordPoint):
+			sys0 = pos[0].coord_sys
+			if any(p.coord_sys is not sys0 for p in pos):
+				raise ValueError(
+					"batch CoordPoint input requires a uniform coord_sys; "
+					"convert to a common system first"
+				)
+			func_coord_sys = getattr(self, 'coord_sys', None)
+			if func_coord_sys is not None and sys0 is not func_coord_sys:
+				pos = [p.convert_to(func_coord_sys) for p in pos]
+			pos = np.stack([p.pos for p in pos])
 		return super().__call__(pos, ignore_domain)
 
 	def derivative(self, coord):
@@ -70,6 +90,12 @@ class Funcs3D(_base.FuncBase):
 
 		result = sum(terms) / jacobian(pos_arr)
 		return result[0] if single_input else result
+
+	def integrate(self, a=None, b=None):
+		raise NotImplementedError(
+			"integrate() is not implemented for 3D functions; "
+			"use scipy.integrate.dblquad or tplquad for multi-dimensional integration"
+		)
 
 
 
@@ -171,7 +197,7 @@ class Cylindrical(Funcs3D):
 		return 1j * self.m_azim * self
 
 	def _gradient_component(self, coord):
-		if self.coord_sys.name == 'cylindrical' and coord == 'phi':
+		if coord == 'phi':
 			# Bessel recurrence B_n(x)/x = 1/(2n)·(B_{n-1}(x) ± B_{n+1}(x)) absorbs 1/ρ analytically, keeping result as a sum of Cylindrical terms.
 			if self.m_azim == 0 or self.order == 0:
 				return _base.ZeroFunc(domain=self.domain, input_dim=3)

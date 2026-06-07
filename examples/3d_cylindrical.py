@@ -88,6 +88,19 @@ print("  −(k_r²+k_z²)·f      =", helm_rhs)
 assert np.isclose(lap_num, helm_rhs, rtol=1e-4), f"Helmholtz mismatch: {lap_num} vs {helm_rhs}"
 print("  Helmholtz verified!")
 
+# ------------------------------------------------------------------ Batch CoordPoint input
+print("\n=== Batch CoordPoint input ===")
+batch_pts = [
+    CoordPoint([0.5, 0.0,     0.0], Cylindrical3D),
+    CoordPoint([1.0, np.pi/4, 0.5], Cylindrical3D),
+    CoordPoint([1.5, np.pi/2, 1.0], Cylindrical3D),
+]
+batch_vals = f(batch_pts)
+expected_batch = np.array([f(p) for p in batch_pts])
+assert np.allclose(batch_vals, expected_batch), f"batch mismatch: {batch_vals} vs {expected_batch}"
+print("  f on 3 points:", batch_vals)
+print("  Batch CoordPoint input verified!")
+
 # ------------------------------------------------------------------ Symbolic output
 print("\n=== Symbolic output ===")
 print("  f.sympy_output() =", f.sympy_output())

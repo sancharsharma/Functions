@@ -77,6 +77,16 @@ class ExpFunc(Funcs1D):
 	def derivative(self):
 		return ExpFunc(self.k, ampl=self.k * self.ampl, shift=self.shift, domain=self.domain)
 
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			if self.k == 0:
+				raise NotImplementedError(
+					"ExpFunc with k=0 (a constant) has no ExpFunc antiderivative; "
+					"use PolyFunc([0, ampl]) or call integrate(a, b) for a definite integral"
+				)
+			return ExpFunc(self.k, ampl=self.ampl / self.k, shift=self.shift, domain=self.domain)
+		return super().integrate(a, b)
+
 	def sympy_output(self):
 		x = self.sympy_var
 		return sym.sympify(self.ampl) * sym.exp(sym.sympify(self.k) * (x - sym.sympify(self.shift)))
@@ -122,6 +132,16 @@ class PowFunc(Funcs1D):
 			return _base.ZeroFunc(domain=self.domain, input_dim=1)
 		return PowFunc(self.power - 1, ampl=self.power * self.ampl, domain=self.domain)
 
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			if self.power == -1:
+				raise NotImplementedError(
+					"PowFunc with power=-1 (1/x) has no PowFunc antiderivative; "
+					"call integrate(a, b) for a definite integral"
+				)
+			return PowFunc(self.power + 1, ampl=self.ampl / (self.power + 1), domain=self.domain)
+		return super().integrate(a, b)
+
 	def sympy_output(self):
 		x = self.sympy_var
 		return sym.sympify(self.ampl) * x ** self.power
@@ -153,12 +173,13 @@ class PolyFunc(Funcs1D):
 			c1 = np.pad(self.coeffs, (0, n - len(self.coeffs)))
 			c2 = np.pad(other.coeffs, (0, n - len(other.coeffs)))
 			return PolyFunc(c1 + c2, domain=lambda pos: self.domain(pos) and other.domain(pos))
-		if isinstance(other, _base.ConstFunc):
+		if isinstance(other, _base.ConstFunc) and other.output_dim == 1:
 			dtype = np.result_type(self.coeffs.dtype, np.array(other.const).dtype)
 			new_coeffs = self.coeffs.astype(dtype)
 			new_coeffs[0] += other.const
 			return PolyFunc(new_coeffs, domain=lambda pos: self.domain(pos) and other.domain(pos))
-		if isinstance(other, PowFunc) and other.power >= 0 and int(other.power) == other.power:
+		if (isinstance(other, PowFunc) and np.isscalar(other.ampl)
+				and other.power >= 0 and int(other.power) == other.power):
 			p = int(other.power)
 			n = max(len(self.coeffs), p + 1)
 			dtype = np.result_type(self.coeffs.dtype, np.array(other.ampl).dtype)
@@ -187,6 +208,12 @@ class PolyFunc(Funcs1D):
 			return _base.ZeroFunc(domain=self.domain, input_dim=1)
 		new_coeffs = self.coeffs[1:] * np.arange(1, len(self.coeffs))
 		return PolyFunc(new_coeffs, domain=self.domain)
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			anti = np.concatenate([[0.0], self.coeffs / np.arange(1, len(self.coeffs) + 1)])
+			return PolyFunc(anti, domain=self.domain)
+		return super().integrate(a, b)
 
 	def sympy_output(self):
 		x = self.sympy_var
@@ -307,8 +334,12 @@ class SumOfExps(Funcs1D):
 	def simplify(self, deep=False, exp_threshold=0.0, coeff_threshold=0.0, t_samples=None, atol=None, rtol=None):
 		"""Merge exponents, drop small terms, and optionally verify accuracy.
 
-		exp_threshold        : merge exponents within this absolute tolerance (0 = exact match only).
-		                  Single-grid scheme with cell size exp_threshold/2; pairs that straddle a cell boundary may not be merged.
+		deep            : accepted for API consistency with SumOfFuncs/ProdOfFuncs, which call
+		                  f.simplify(deep=True) on sub-expressions. Has no effect here — SumOfExps
+		                  has no sub-expressions to recurse into.
+		exp_threshold   : merge exponents within this absolute tolerance (0 = exact match only).
+		                  Single-grid scheme with cell size exp_threshold/2; pairs that straddle a
+		                  cell boundary may not be merged.
 		coeff_threshold : drop terms with |c| < coeff_threshold * max|c| after merging (0 = keep all).
 		t_samples       : optional sample points for an error report / tolerance check.
 		atol, rtol      : raise ValueError if max abs/rel error exceeds these (requires t_samples).
@@ -364,6 +395,22 @@ class SumOfExps(Funcs1D):
 		der_fn = self.copy()
 		der_fn.coeffs = self.exponents * self.coeffs
 		return der_fn
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			if np.any(self.exponents == 0):
+				raise NotImplementedError(
+					"SumOfExps with k=0 terms has no SumOfExps antiderivative; "
+					"call integrate(a, b) for a definite integral"
+				)
+			return SumOfExps(self.coeffs / self.exponents, self.exponents, self.shifts, domain=self.domain)
+		result = 0.0
+		for c, k, s in zip(self.coeffs, self.exponents, self.shifts):
+			if k == 0:
+				result = result + c * (b - a)
+			else:
+				result = result + c / k * (np.exp(k * (b - s)) - np.exp(k * (a - s)))
+		return result
 
 	def copy(self):
 		return SumOfExps(coeffs=self.coeffs.copy(), exponents=self.exponents.copy(), shifts=self.shifts.copy(), domain=self.domain)
