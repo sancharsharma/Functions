@@ -12,13 +12,6 @@ class FuncBase(ABC):
 
 	def pos_to_arr(self, pos):
 		d = self.input_dim
-		if d == 0: # Discrete space
-			arr = np.asarray(pos)
-			if not np.issubdtype(arr.dtype, np.integer):
-				raise ValueError(f"input_dim=0 (discrete) requires integer input, got dtype {arr.dtype}")
-			if arr.ndim == 0:  return arr.reshape(1), True
-			if arr.ndim == 1:  return arr, False
-			raise ValueError("Discrete function expects a scalar integer or 1D integer array")
 		pos_arr = np.asarray(pos)
 		if np.issubdtype(pos_arr.dtype, np.complexfloating):
 			raise ValueError(f"Inputs must be real-valued, got dtype {pos_arr.dtype}. Complex inputs are not supported.")
@@ -45,7 +38,6 @@ class FuncBase(ABC):
 		Calling convention depends on the subclass family:
 		  - 1D  (Funcs1D subclasses): no arguments — always w.r.t. the single variable.
 		  - 3D  (Funcs3D subclasses): derivative(coord: str) — coordinate name, e.g. 'rho', 'phi', 'z'.
-		  - Discrete (FuncsDiscrete): derivative(direction='forward') — 'forward', 'backward', or 'central'.
 
 		Combinators (SumOfFuncs, ProdOfFuncs, etc.) forward *args/**kwargs unchanged.
 		"""
@@ -62,11 +54,6 @@ class FuncBase(ABC):
 				" (call .sympy_output() for a symbolic representation — may be slow for large expressions)")
 
 	def numerical_derivative(self, pos, coord_index=0, eps=1e-5):
-		if self.input_dim == 0:
-			raise TypeError(
-				"numerical_derivative is not defined for discrete (input_dim=0) functions; "
-				"use .derivative(direction='forward'/'backward') instead."
-			)
 		pos_arr, single_input = self.pos_to_arr(pos)
 		if self.input_dim == 1:
 			eps_step = eps
@@ -502,12 +489,6 @@ class ProdOfFuncs(FuncBase):
 		return gen_prod([f._eval(pos_arr) for f in self.funcs])
 
 	def derivative(self, *args, **kwargs):
-		if any(getattr(f, 'input_dim', None) == 0 for f in self.funcs):
-			raise TypeError(
-				"ProdOfFuncs uses the continuous product rule, which is incorrect for "
-				"discrete functions. Use concrete subclass __mul__ for analytic products "
-				"(e.g. ExpSeq * ExpSeq → single ExpSeq)."
-			)
 		terms = []
 		for i, fi in enumerate(self.funcs):
 			others = self.funcs[:i] + self.funcs[i+1:]

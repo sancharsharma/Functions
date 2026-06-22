@@ -36,6 +36,7 @@ class Funcs1D(_base.FuncBase):
 # ampl * exp(k * (x - shift))
 class ExpFunc(Funcs1D):
 
+	# TODO: If k=0, we should just return a ConstFunc.
 	def __new__(cls, k, ampl=1, shift=0, domain=lambda _: True):
 		if ampl == 0:
 			return _base.ZeroFunc(domain=domain, input_dim=1)
@@ -226,6 +227,7 @@ class PolyFunc(Funcs1D):
 # A class to represent a sum of exponentials
 class SumOfExps(Funcs1D):
 
+	# TODO: If only one coeff, exponent is passed, we should output ExpFunc
 	def __new__(cls, coeffs, exponents, shifts=None, domain=lambda _: True):
 		if np.all(np.asarray(coeffs) == 0):
 			return _base.ZeroFunc(domain=domain, input_dim=1)
@@ -282,6 +284,7 @@ class SumOfExps(Funcs1D):
 			if other == 0:
 				return self.copy()
 			other = SumOfExps([other], [0], shifts=[0])
+		# TODO: Slightly strange writing, shouldn't we be writing if isinstance(other, SumOfExps): ... and then returning super().__add__(other)? That's the usual convention, I guess.
 		elif not isinstance(other, SumOfExps):
 			return super().__add__(other)
 		coeffs = np.concatenate((self.coeffs, other.coeffs))
@@ -352,6 +355,7 @@ class SumOfExps(Funcs1D):
 		re_arr = np.real(self.exponents)
 		im_arr = np.imag(self.exponents)
 
+		# TODO: Can the following be simplified for exp_threshold=0 case to make it faster?
 		if exp_threshold > 0:
 			keys_re = np.floor(re_arr * 2 / exp_threshold).astype(np.int64)
 			keys_im = np.floor(im_arr * 2 / exp_threshold).astype(np.int64)
@@ -380,7 +384,7 @@ class SumOfExps(Funcs1D):
 		result = SumOfExps(coeffs=new_coeffs, exponents=new_exponents,
 		                   shifts=new_shifts, domain=self.domain)
 
-		if coeff_threshold > 0 and isinstance(result, SumOfExps) and len(result.coeffs) > 0:
+		if coeff_threshold > 0 and isinstance(result, SumOfExps) and len(result.coeffs) > 0: # TODO: Is len() check stale?
 			abs_c  = np.abs(result.coeffs)
 			mask   = abs_c > coeff_threshold * abs_c.max()
 			result = SumOfExps(coeffs=result.coeffs[mask], exponents=result.exponents[mask],

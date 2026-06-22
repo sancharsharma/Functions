@@ -20,7 +20,7 @@ A function library for Python. Functions carry domain checks, support operator o
 
 ## Features
 
-- **Built-in function library** — a collection of 1D functions (`ExpFunc`, `PowFunc`, `PolyFunc`, `SumOfExps`), 3D functions (`Exp3D`, `Cylindrical`, `PowerCylindrical`), and discrete/integer-domain sequences (`ExpSeq`, `PolySeq`, `TabFunc`).
+- **Built-in function library** — a collection of 1D functions (`ExpFunc`, `PowFunc`, `PolyFunc`, `SumOfExps`) and 3D functions (`Exp3D`, `Cylindrical`, `PowerCylindrical`).
 - **Unified interface** — every function shares a common abstract base (`FuncBase`) with consistent `__call__`, `derivative`, `sympy_output`, and `copy` APIs.
 - **Evaluation** — fast NumPy numerical evaluation (`_eval`).
 - **Operator overloading** — `+` and `*` produce fused or composed functions; some simplifications are performed automatically (e.g. two exponentials with equal exponents merge into one).
@@ -68,7 +68,7 @@ from Functions.Functions_1D import ExpFunc, SumOfExps
 
 ## Examples
 
-See the [`examples/`](examples/) folder for worked scripts covering 1D functions, 3D Cartesian and cylindrical functions, discrete sequences, coordinate systems, function composition, and more.
+See the [`examples/`](examples/) folder for worked scripts covering 1D functions, 3D Cartesian and cylindrical functions, coordinate systems, function composition, and more.
 
 ## Module overview
 
@@ -77,7 +77,6 @@ See the [`examples/`](examples/) folder for worked scripts covering 1D functions
 | `Functions_Base.py` | `FuncBase` ABC; `ZeroFunc`, `ConstFunc`, `SumOfFuncs`, `ProdOfFuncs`, `ComposedFunc`, `VecFunc`, `CoordPow`, `TrigCoord` |
 | `Functions_1D.py` | `Funcs1D`, `ExpFunc`, `PowFunc`, `PolyFunc`, `SumOfExps` |
 | `Functions_3D.py` | `Funcs3D`, `Exp3D`, `Cylindrical`, `PowerCylindrical` |
-| `Functions_Discrete.py` | `FuncsDiscrete`, `ExpSeq`, `PolySeq`, `TabFunc` |
 | `CoordSystems.py` | `CoordSystem`, `CoordPoint`; pre-built: `Cartesian2D/3D`, `Cylindrical3D`, `Polar2D/3D`, `Cylindrical2D` |
 
 ## Architecture
@@ -118,7 +117,7 @@ Several classes collapse degenerate cases at construction time:
 
 ## Adding a new function class
 
-1. Subclass `Funcs1D`, `Funcs3D`, `FuncsDiscrete`, or `FuncBase` directly.
+1. Subclass `Funcs1D`, `Funcs3D`, or `FuncBase` directly.
 2. Implement `_eval`, `derivative`, `sympy_output`, `copy`.
 3. Override `__add__` / `__mul__` for short-circuit simplifications; fall back to `super()` and return `NotImplemented` for unhandled types.
 4. Use `__new__` to collapse degenerate cases, e.g. to `ZeroFunc` or `ConstFunc`.
