@@ -61,12 +61,14 @@ print(f"  terms after (exp_threshold=0.01): {len(h_sim.coeffs)}")
 assert len(h_sim.coeffs) == 2
 assert np.allclose(h(xs), h_sim(xs), atol=1e-3)
 
-# simplify(): drop tiny terms
+# simplify(): drop tiny terms. Dropping down to a single term collapses SumOfExps → ExpFunc (the same __new__ simplification that maps a 1-term sum to an ExpFunc), so the result has no .coeffs — count terms in a type-aware way.
 noisy = SumOfExps(coeffs=[10, 1e-9, 1e-9], exponents=[1.0, 2.0, 3.0])
 print("\n=== simplify(): drop small coefficients ===")
 clean = noisy.simplify(coeff_threshold=1e-8)
-print(f"  terms before: {len(noisy.coeffs)}, after: {len(clean.coeffs)}")
-assert len(clean.coeffs) == 1
+n_after = len(clean.coeffs) if isinstance(clean, SumOfExps) else 1
+print(f"  terms before: {len(noisy.coeffs)}, after: {n_after} (collapsed to {type(clean).__name__})")
+assert isinstance(clean, ExpFunc)
+assert np.isclose(clean(1), 10 * np.e, rtol=1e-10)
 
 # ------------------------------------------------------------------ Arithmetic
 a = SumOfExps(coeffs=[1], exponents=[1.0])

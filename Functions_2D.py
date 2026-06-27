@@ -5,24 +5,24 @@ from . import Functions_Base as _base
 from . import CoordSystems as _coords
 import sympy.functions.special.bessel as bessel
 
-_KNOWN_COORDS = frozenset({'x', 'y', 'z', 'rho', 'phi', 'r', 'theta'})
+_KNOWN_COORDS = frozenset({'x', 'y', 'rho', 'phi', 'r'})
 
 
 ################
-class Funcs3D(_base.FuncBase):
+class Funcs2D(_base.FuncBase):
 
 	def __init__(self, domain=lambda pos: True, output_dim=1):
-		super().__init__(domain=domain, input_dim=3, output_dim=output_dim)
+		super().__init__(domain=domain, input_dim=2, output_dim=output_dim)
 
 	def __setattr__(self, name, value):
 		if name == 'coord_sys':
 			raise AttributeError("coord_sys is a class-level constant and cannot be set on instances")
 		super().__setattr__(name, value)
 
-	def __call__(self, pos, ignore_domain=False): # TODO: This cannot take a combination of CoordPoint and ndarrays. Not a big problem, just an inconvenience.
+	def __call__(self, pos, ignore_domain=False):
 		# CoordPoint input is converted to the function's native system before evaluation, so the
 		# input may be in any system (and a batch may mix systems) — convert_to is a no-op when a
-		# point is already in the target system.
+		# point is already in the target system. Mirrors Funcs3D.__call__.
 		func_coord_sys = getattr(self, 'coord_sys', None)
 		if isinstance(pos, _coords.CoordPoint):
 			if func_coord_sys is not None:
@@ -75,13 +75,14 @@ class Funcs3D(_base.FuncBase):
 
 
 ################
-class Exp3D(Funcs3D):
+# The function ampl * e^(i*k_vec·pos) in 2D Cartesian coordinates.
+class Exp2D(Funcs2D):
 
-	coord_sys = _coords.Cartesian3D
+	coord_sys = _coords.Cartesian2D
 
 	def __new__(cls, k_vec, ampl=1, domain=lambda pos: True):
 		if ampl == 0:
-			return _base.ZeroFunc(domain=domain, input_dim=3)
+			return _base.ZeroFunc(domain=domain, input_dim=2)
 		return object.__new__(cls)
 
 	def __init__(self, k_vec, ampl=1, domain=lambda pos: True):
@@ -95,8 +96,8 @@ class Exp3D(Funcs3D):
 		return self.ampl * np.exp(1j * phase)
 
 	def __add__(self, other):
-		if isinstance(other, Exp3D) and np.array_equal(self.k_vec, other.k_vec):
-			return Exp3D(self.k_vec, ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
+		if isinstance(other, Exp2D) and np.array_equal(self.k_vec, other.k_vec):
+			return Exp2D(self.k_vec, ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
 	def __mul__(self, other):
@@ -111,37 +112,92 @@ class Exp3D(Funcs3D):
 	def _deriv_y(self):
 		return self.clone(ampl=1j * self.k_vec[1] * self.ampl)
 
-	def _deriv_z(self):
-		return self.clone(ampl=1j * self.k_vec[2] * self.ampl)
-
 	def sympy_output(self):
-		x, y, z = sym.symbols('x y z', real=True)
-		phase = sum((ki*ci for ki, ci in zip(self.k_vec, [x, y, z])), sym.S.Zero)
+		x, y = sym.symbols('x y', real=True)
+		phase = sum((ki*ci for ki, ci in zip(self.k_vec, [x, y])), sym.S.Zero)
 		return self.ampl * sym.exp(sym.I * phase)
 
 
 ################
-# The function bess_fn(scale*rho) * e^(i*m_azim*phi) * e^(i*kz*z)
-# bessel = [fn, order, scale] where fn in {'J','Y','I','K'} and the function is fn(order, scale*rho)
-class Cylindrical(Funcs3D):
+# The function ampl * r^power * e^(i*m_azim*phi) in 2D polar coordinates.
+class PolarPower(Funcs2D):
 
-	coord_sys = _coords.Cylindrical3D
+	coord_sys = _coords.Polar2D
 
-	def __new__(cls, kz, m_azim, bessel, ampl=1, domain=lambda pos: True):
+	def __new__(cls, m_azim, power=0, ampl=1, domain=lambda pos: True):
 		if ampl == 0:
-			return _base.ZeroFunc(domain=domain, input_dim=3)
+			return _base.ZeroFunc(domain=domain, input_dim=2)
 		return object.__new__(cls)
 
-	# domain function should take a 3-component vector input as [rho, phi, z]
-	def __init__(self, kz, m_azim, bessel, ampl=1, domain=lambda pos: True):
+	def __init__(self, m_azim, power=0, ampl=1, domain=lambda pos: True):
+		super().__init__(domain=domain)
+		self.m_azim = m_azim
+		self.power = power
+		self.ampl = ampl
+		self.parameters = {'m_azim': m_azim, 'power': power, 'ampl': ampl, 'domain': domain}
+
+	def _eval(self, pos_arr):
+		r_out    = pos_arr[:, 0] ** self.power
+		azim_out = np.exp(1j * self.m_azim * pos_arr[:, 1])
+		return self.ampl * r_out * azim_out
+
+	def _deriv_r(self):
+		if self.power == 0:
+			return _base.ZeroFunc(domain=self.domain, input_dim=2)
+		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
+
+	def _deriv_phi(self):
+		if self.m_azim == 0:
+			return _base.ZeroFunc(domain=self.domain, input_dim=2)
+		return 1j * self.m_azim * self
+
+	def _gradient_component(self, coord):
+		if coord == 'phi':
+			# (1/r)·∂_φ f absorbs the scale factor analytically: drops the power by one.
+			if self.m_azim == 0:
+				return _base.ZeroFunc(domain=self.domain, input_dim=2)
+			return self.clone(power=self.power - 1, ampl=1j * self.m_azim * self.ampl)
+		return NotImplemented
+
+	def __add__(self, other):
+		if (isinstance(other, PolarPower)
+				and self.m_azim == other.m_azim and self.power == other.power):
+			return PolarPower(self.m_azim, power=self.power,
+							  ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
+		return super().__add__(other)
+
+	def __mul__(self, other):
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
+		return super().__mul__(other)
+
+	def sympy_output(self):
+		r, phi = sym.symbols('r phi', real=True)
+		return self.ampl * r**self.power * sym.exp(sym.I*self.m_azim*phi)
+
+
+################
+# The function ampl * bess_fn(scale*r) * e^(i*m_azim*phi) in 2D polar coordinates.
+# bessel = [fn, order, scale] where fn in {'J','Y','I','K'} and the radial part is fn(order, scale*r).
+class PolarBessel(Funcs2D):
+
+	coord_sys = _coords.Polar2D
+
+	def __new__(cls, m_azim, bessel, ampl=1, domain=lambda pos: True):
+		if ampl == 0:
+			return _base.ZeroFunc(domain=domain, input_dim=2)
+		return object.__new__(cls)
+
+	# domain function should take a 2-component vector input as [r, phi]
+	def __init__(self, m_azim, bessel, ampl=1, domain=lambda pos: True):
 		super().__init__(domain=domain)
 		self.ampl = ampl
-		self.kz = kz
 		self.m_azim = m_azim
 		self.bessel_name = bessel[0]
 		self.order = bessel[1]
-		self.scale = bessel[2] if len(bessel) == 3 else kz
-		self.parameters = {'kz': kz, 'm_azim': m_azim,
+		self.scale = bessel[2] if len(bessel) == 3 else 1
+		self.parameters = {'m_azim': m_azim,
 						   'bessel': [self.bessel_name, self.order, self.scale],
 						   'ampl': ampl, 'domain': domain}
 
@@ -158,13 +214,12 @@ class Cylindrical(Funcs3D):
 				raise ValueError(f"Unknown Bessel function '{bessel[0]}', expected one of 'J', 'Y', 'I', 'K'")
 
 	def _eval(self, pos_arr):
-		bess_out = self.bess_fn(self.order, self.scale*pos_arr[:,0])
-		azim_out = np.exp(1j*self.m_azim*pos_arr[:,1])
-		z_out    = np.exp(1j*self.kz*pos_arr[:,2])
-		return self.ampl*bess_out*azim_out*z_out
+		bess_out = self.bess_fn(self.order, self.scale*pos_arr[:, 0])
+		azim_out = np.exp(1j*self.m_azim*pos_arr[:, 1])
+		return self.ampl*bess_out*azim_out
 
-	def _deriv_rho(self):
-		if self.bessel_name in ['J','Y']:
+	def _deriv_r(self):
+		if self.bessel_name in ['J', 'Y']:
 			ampl_minus, ampl_plus = 1, -1
 		elif self.bessel_name == 'I':
 			ampl_minus, ampl_plus = 1, 1
@@ -176,18 +231,19 @@ class Cylindrical(Funcs3D):
 
 	def _deriv_phi(self):
 		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
+			return _base.ZeroFunc(domain=self.domain, input_dim=2)
 		return 1j * self.m_azim * self
 
 	def _gradient_component(self, coord):
 		if coord == 'phi':
-			# Bessel recurrence B_n(x)/x = 1/(2n)·(B_{n-1}(x) ± B_{n+1}(x)) absorbs 1/ρ analytically, keeping result as a sum of Cylindrical terms.
+			# Bessel recurrence B_n(x)/x = 1/(2n)·(B_{n-1}(x) ± B_{n+1}(x)) absorbs 1/r analytically,
+			# keeping the result as a sum of PolarBessel terms.
 			if self.m_azim == 0:
-				return _base.ZeroFunc(domain=self.domain, input_dim=3)
+				return _base.ZeroFunc(domain=self.domain, input_dim=2)
 			if self.order == 0:
-				# recurrence needs 1/(2·order); let gradient() fall back to (1/ρ)·∂_φ = inv_h·derivative
+				# recurrence needs 1/(2·order); let gradient() fall back to (1/r)·∂_φ = inv_h·derivative
 				return NotImplemented
-			if self.bessel_name in ['J','Y']:
+			if self.bessel_name in ['J', 'Y']:
 				ampl_minus, ampl_plus = 1, 1
 			elif self.bessel_name == 'I':
 				ampl_minus, ampl_plus = 1, -1
@@ -199,15 +255,12 @@ class Cylindrical(Funcs3D):
 			return (ampl*ampl_plus)*self.increased_order() + (ampl*ampl_minus)*self.reduced_order()
 		return NotImplemented
 
-	def _deriv_z(self):
-		return 1j*self.kz*self
-
 	def __add__(self, other):
-		if (isinstance(other, Cylindrical)
-				and self.kz == other.kz and self.m_azim == other.m_azim
+		if (isinstance(other, PolarBessel)
+				and self.m_azim == other.m_azim
 				and self.bessel_name == other.bessel_name
 				and self.order == other.order and self.scale == other.scale):
-			return Cylindrical(self.kz, self.m_azim,
+			return PolarBessel(self.m_azim,
 							   [self.bessel_name, self.order, self.scale],
 							   ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
@@ -225,71 +278,7 @@ class Cylindrical(Funcs3D):
 		return self.clone(bessel=[self.bessel_name, self.order + 1, self.scale])
 
 	def sympy_output(self):
-		rho, phi, z = sym.symbols('rho phi z', real=True)
+		r, phi = sym.symbols('r phi', real=True)
 		bessel_map = {'J': bessel.besselj, 'Y': bessel.bessely, 'I': bessel.besseli, 'K': bessel.besselk}
 		fun = bessel_map[self.bessel_name]
-		return self.ampl * fun(self.order, self.scale*rho) * sym.exp(sym.I*self.kz*z) * sym.exp(sym.I*self.m_azim*phi)
-
-
-################
-# The function ampl * rho^power * e^(i*m_azim*phi) * e^(i*kz*z)
-class PowerCylindrical(Funcs3D):
-
-	coord_sys = _coords.Cylindrical3D
-
-	def __new__(cls, kz, m_azim, power=0, ampl=1, domain=lambda pos: True):
-		if ampl == 0:
-			return _base.ZeroFunc(domain=domain, input_dim=3)
-		return object.__new__(cls)
-
-	def __init__(self, kz, m_azim, power=0, ampl=1, domain=lambda pos: True):
-		super().__init__(domain=domain)
-		self.kz = kz
-		self.m_azim = m_azim
-		self.power = power
-		self.ampl = ampl
-		self.parameters = {'kz': kz, 'm_azim': m_azim, 'power': power, 'ampl': ampl, 'domain': domain}
-
-	def _eval(self, pos_arr):
-		rho_out  = pos_arr[:,0] ** self.power
-		azim_out = np.exp(1j * self.m_azim * pos_arr[:,1])
-		z_out    = np.exp(1j * self.kz * pos_arr[:,2])
-		return self.ampl * rho_out * azim_out * z_out
-
-	def _deriv_rho(self):
-		if self.power == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
-		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
-
-	def _deriv_z(self):
-		return self.clone(ampl=1j * self.kz * self.ampl)
-
-	def _deriv_phi(self):
-		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
-		return 1j * self.m_azim * self
-
-	def _gradient_component(self, coord):
-		if coord == 'phi':
-			if self.m_azim == 0:
-				return _base.ZeroFunc(domain=self.domain, input_dim=3)
-			return self.clone(power=self.power - 1, ampl=1j * self.m_azim * self.ampl)
-		return NotImplemented
-
-	def __add__(self, other):
-		if (isinstance(other, PowerCylindrical)
-				and self.kz == other.kz and self.m_azim == other.m_azim
-				and self.power == other.power):
-			return PowerCylindrical(self.kz, self.m_azim, power=self.power,
-									ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
-		return super().__add__(other)
-
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
-	def sympy_output(self):
-		rho, phi, z = sym.symbols('rho phi z', real=True)
-		return self.ampl * rho**self.power * sym.exp(sym.I*self.m_azim*phi) * sym.exp(sym.I*self.kz*z)
+		return self.ampl * fun(self.order, self.scale*r) * sym.exp(sym.I*self.m_azim*phi)

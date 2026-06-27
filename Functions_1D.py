@@ -29,6 +29,25 @@ class Funcs1D(_base.FuncBase):
 			result = result.derivative()
 		return result
 
+	def numerical_integrate(self, a, b):
+		from scipy.integrate import quad
+		result, _ = quad(lambda x: float(self(x, ignore_domain=True)), a, b)
+		return result
+
+	def integrate(self, a=None, b=None):
+		if a is None and b is None:
+			return self.antiderivative()
+		if a is not None and b is not None:
+			try:
+				F = self.antiderivative()
+				return F(b, ignore_domain=True) - F(a, ignore_domain=True)
+			except NotImplementedError:
+				return self.numerical_integrate(a, b)
+		raise ValueError(
+			"integrate() takes either no positional arguments (indefinite) "
+			"or exactly two (definite interval [a, b])"
+		)
+
 
 
 
@@ -36,10 +55,11 @@ class Funcs1D(_base.FuncBase):
 # ampl * exp(k * (x - shift))
 class ExpFunc(Funcs1D):
 
-	# TODO: If k=0, we should just return a ConstFunc.
 	def __new__(cls, k, ampl=1, shift=0, domain=lambda _: True):
 		if ampl == 0:
 			return _base.ZeroFunc(domain=domain, input_dim=1)
+		if k == 0:
+			return _base.ConstFunc(ampl, domain=domain, input_dim=1)
 		return object.__new__(cls)
 
 	def __init__(self, k, ampl=1, shift=0, domain=lambda _: True):
@@ -47,13 +67,14 @@ class ExpFunc(Funcs1D):
 		self.k = k
 		self.ampl = ampl
 		self.shift = shift
+		self.parameters = {'k': k, 'ampl': ampl, 'shift': shift, 'domain': domain}
 
 	def _eval(self, pos_arr):
 		return self.ampl * np.exp(self.k * (pos_arr - self.shift))
 
 	def __add__(self, other):
 		if isinstance(other, ExpFunc) and self.k == other.k:
-			domain = lambda pos: self.domain(pos) and other.domain(pos)
+			domain = _base.combine_domains(self, other)
 			s_mean = (self.shift + other.shift) / 2
 			new_ampl = (self.ampl  * np.exp(self.k  * (s_mean - self.shift))
 					  + other.ampl * np.exp(other.k * (s_mean - other.shift)))
@@ -61,32 +82,25 @@ class ExpFunc(Funcs1D):
 		if isinstance(other, ExpFunc):
 			return SumOfExps([self.ampl, other.ampl], [self.k, other.k],
 							 shifts=[self.shift, other.shift],
-							 domain=lambda pos: self.domain(pos) and other.domain(pos))
+							 domain=_base.combine_domains(self, other))
 		if isinstance(other, SumOfExps):
-			return SumOfExps([self.ampl], [self.k], shifts=[self.shift], domain=self.domain) + other
+			return other + self
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
-			val = other if np.isscalar(other) else other.const
-			return ExpFunc(self.k, ampl=val * self.ampl, shift=self.shift, domain=self.domain)
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
 		return super().__mul__(other)
 
-	def copy(self):
-		return ExpFunc(self.k, ampl=self.ampl, shift=self.shift, domain=self.domain)
-
 	def derivative(self):
-		return ExpFunc(self.k, ampl=self.k * self.ampl, shift=self.shift, domain=self.domain)
+		return self.clone(ampl=self.k * self.ampl)
 
-	def integrate(self, a=None, b=None):
-		if a is None and b is None:
-			if self.k == 0:
-				raise NotImplementedError(
-					"ExpFunc with k=0 (a constant) has no ExpFunc antiderivative; "
-					"use PolyFunc([0, ampl]) or call integrate(a, b) for a definite integral"
-				)
-			return ExpFunc(self.k, ampl=self.ampl / self.k, shift=self.shift, domain=self.domain)
-		return super().integrate(a, b)
+	def antiderivative(self):
+		return self.clone(ampl=self.ampl / self.k)
+
+	def simplify(self, deep=False, **kwargs):
+		return self
 
 	def sympy_output(self):
 		x = self.sympy_var
@@ -106,42 +120,36 @@ class PowFunc(Funcs1D):
 		super().__init__(domain=domain)
 		self.power = power
 		self.ampl = ampl
+		self.parameters = {'power': power, 'ampl': ampl, 'domain': domain}
 
 	def _eval(self, pos_arr):
 		return self.ampl * pos_arr ** self.power
 
 	def __add__(self, other):
 		if isinstance(other, PowFunc) and self.power == other.power:
-			domain = lambda pos: self.domain(pos) and other.domain(pos)
-			return PowFunc(self.power, ampl=self.ampl + other.ampl, domain=domain)
+			return PowFunc(self.power, ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
-			val = other if np.isscalar(other) else other.const
-			return PowFunc(self.power, ampl=val * self.ampl, domain=self.domain)
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
 		if isinstance(other, PowFunc):
-			domain = lambda pos: self.domain(pos) and other.domain(pos)
-			return PowFunc(self.power + other.power, ampl=self.ampl * other.ampl, domain=domain)
+			return PowFunc(self.power + other.power, ampl=self.ampl * other.ampl, domain=_base.combine_domains(self, other))
 		return super().__mul__(other)
-
-	def copy(self):
-		return PowFunc(self.power, ampl=self.ampl, domain=self.domain)
 
 	def derivative(self):
 		if self.power == 0:
 			return _base.ZeroFunc(domain=self.domain, input_dim=1)
-		return PowFunc(self.power - 1, ampl=self.power * self.ampl, domain=self.domain)
+		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
 
-	def integrate(self, a=None, b=None):
-		if a is None and b is None:
-			if self.power == -1:
-				raise NotImplementedError(
-					"PowFunc with power=-1 (1/x) has no PowFunc antiderivative; "
-					"call integrate(a, b) for a definite integral"
-				)
-			return PowFunc(self.power + 1, ampl=self.ampl / (self.power + 1), domain=self.domain)
-		return super().integrate(a, b)
+	def antiderivative(self):
+		if self.power == -1:
+			raise NotImplementedError(
+				"PowFunc with power=-1 (1/x) has no PowFunc antiderivative; "
+				"call integrate(a, b) for a definite integral"
+			)
+		return self.clone(power=self.power + 1, ampl=self.ampl / (self.power + 1))
 
 	def sympy_output(self):
 		x = self.sympy_var
@@ -164,6 +172,7 @@ class PolyFunc(Funcs1D):
 		coeffs = coeffs.astype(dtype)
 		nonzero_idx = np.flatnonzero(coeffs)
 		self.coeffs = coeffs[:nonzero_idx[-1] + 1]
+		self.parameters = {'coeffs': self.coeffs, 'domain': domain}
 
 	def _eval(self, pos_arr):
 		return np.polynomial.polynomial.polyval(pos_arr, self.coeffs)
@@ -173,12 +182,12 @@ class PolyFunc(Funcs1D):
 			n = max(len(self.coeffs), len(other.coeffs))
 			c1 = np.pad(self.coeffs, (0, n - len(self.coeffs)))
 			c2 = np.pad(other.coeffs, (0, n - len(other.coeffs)))
-			return PolyFunc(c1 + c2, domain=lambda pos: self.domain(pos) and other.domain(pos))
+			return PolyFunc(c1 + c2, domain=_base.combine_domains(self, other))
 		if isinstance(other, _base.ConstFunc) and other.output_dim == 1:
 			dtype = np.result_type(self.coeffs.dtype, np.array(other.const).dtype)
 			new_coeffs = self.coeffs.astype(dtype)
 			new_coeffs[0] += other.const
-			return PolyFunc(new_coeffs, domain=lambda pos: self.domain(pos) and other.domain(pos))
+			return PolyFunc(new_coeffs, domain=_base.combine_domains(self, other))
 		if (isinstance(other, PowFunc) and np.isscalar(other.ampl)
 				and other.power >= 0 and int(other.power) == other.power):
 			p = int(other.power)
@@ -186,23 +195,20 @@ class PolyFunc(Funcs1D):
 			dtype = np.result_type(self.coeffs.dtype, np.array(other.ampl).dtype)
 			new_coeffs = np.pad(self.coeffs.astype(dtype), (0, n - len(self.coeffs)))
 			new_coeffs[p] += other.ampl
-			return PolyFunc(new_coeffs, domain=lambda pos: self.domain(pos) and other.domain(pos))
+			return PolyFunc(new_coeffs, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
 	def __mul__(self, other):
-		if np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
-			val = other if np.isscalar(other) else other.const
-			return PolyFunc(val * self.coeffs, domain=self.domain)
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(coeffs=val * self.coeffs)
 		if isinstance(other, PolyFunc):
-			return PolyFunc(np.convolve(self.coeffs, other.coeffs), domain=lambda pos: self.domain(pos) and other.domain(pos))
+			return PolyFunc(np.convolve(self.coeffs, other.coeffs), domain=_base.combine_domains(self, other))
 		if isinstance(other, PowFunc) and other.power >= 0 and int(other.power) == other.power:
 			p = int(other.power)
 			new_coeffs = np.concatenate([np.zeros(p), other.ampl * self.coeffs])
-			return PolyFunc(new_coeffs, domain=lambda pos: self.domain(pos) and other.domain(pos))
+			return PolyFunc(new_coeffs, domain=_base.combine_domains(self, other))
 		return super().__mul__(other)
-
-	def copy(self):
-		return PolyFunc(self.coeffs.copy(), domain=self.domain)
 
 	def derivative(self):
 		if len(self.coeffs) <= 1:
@@ -210,15 +216,13 @@ class PolyFunc(Funcs1D):
 		new_coeffs = self.coeffs[1:] * np.arange(1, len(self.coeffs))
 		return PolyFunc(new_coeffs, domain=self.domain)
 
-	def integrate(self, a=None, b=None):
-		if a is None and b is None:
-			anti = np.concatenate([[0.0], self.coeffs / np.arange(1, len(self.coeffs) + 1)])
-			return PolyFunc(anti, domain=self.domain)
-		return super().integrate(a, b)
+	def antiderivative(self):
+		anti = np.concatenate([[0.0], self.coeffs / np.arange(1, len(self.coeffs) + 1)])
+		return PolyFunc(anti, domain=self.domain)
 
 	def sympy_output(self):
 		x = self.sympy_var
-		return _base.gen_sum([sym.sympify(float(c)) * x**i for i, c in enumerate(self.coeffs) if c != 0])
+		return sum(sym.sympify(float(c)) * x**i for i, c in enumerate(self.coeffs) if c != 0)
 
 
 
@@ -227,10 +231,13 @@ class PolyFunc(Funcs1D):
 # A class to represent a sum of exponentials
 class SumOfExps(Funcs1D):
 
-	# TODO: If only one coeff, exponent is passed, we should output ExpFunc
 	def __new__(cls, coeffs, exponents, shifts=None, domain=lambda _: True):
-		if np.all(np.asarray(coeffs) == 0):
+		coeffs_arr = np.asarray(coeffs)
+		if np.all(coeffs_arr == 0):
 			return _base.ZeroFunc(domain=domain, input_dim=1)
+		if len(coeffs_arr) == 1:
+			shift = 0 if shifts is None else np.asarray(shifts)[0]
+			return ExpFunc(exponents[0], ampl=coeffs[0], shift=shift, domain=domain)
 		return object.__new__(cls)
 
 	def __init__(self, coeffs, exponents, shifts=None, domain=lambda _: True):
@@ -247,6 +254,8 @@ class SumOfExps(Funcs1D):
 		self.coeffs = np.array(coeffs)
 		self.exponents = np.array(exponents)
 		self.shifts = np.array(shifts)
+		self.parameters = {'coeffs': self.coeffs, 'exponents': self.exponents,
+						   'shifts': self.shifts, 'domain': domain}
 
 	def _eval(self, pos_arr):
 		exp_args = self.exponents[:, None] * (pos_arr[None, :] - self.shifts[:, None])
@@ -276,22 +285,24 @@ class SumOfExps(Funcs1D):
 		return np.sum((coeffs_prods * exp_integrals).real)
 
 	def __add__(self, other):
-		if isinstance(other, ExpFunc):
-			other = SumOfExps([other.ampl], [other.k], shifts=[other.shift], domain=other.domain)
-		elif isinstance(other, _base.ConstFunc):
-			other = SumOfExps([other.const], [0], shifts=[0], domain=other.domain)
-		elif np.isscalar(other):
-			if other == 0:
+		if isinstance(other, SumOfExps):
+			o_coeffs, o_exps, o_shifts, o_domain = other.coeffs, other.exponents, other.shifts, other.domain
+		elif isinstance(other, ExpFunc):
+			o_coeffs, o_exps, o_shifts, o_domain = [other.ampl], [other.k], [other.shift], other.domain
+		elif isinstance(other, _base.ConstFunc) and other.output_dim == 1:
+			o_coeffs, o_exps, o_shifts, o_domain = [other.const], [0], [0], other.domain
+		else:
+			val = _base.as_scalar(other)
+			if val is None:
+				return super().__add__(other)
+			if val == 0:
 				return self.copy()
-			other = SumOfExps([other], [0], shifts=[0])
-		# TODO: Slightly strange writing, shouldn't we be writing if isinstance(other, SumOfExps): ... and then returning super().__add__(other)? That's the usual convention, I guess.
-		elif not isinstance(other, SumOfExps):
-			return super().__add__(other)
-		coeffs = np.concatenate((self.coeffs, other.coeffs))
-		exponents = np.concatenate((self.exponents, other.exponents))
-		shifts = np.concatenate((self.shifts, other.shifts))
-		domain = lambda pos: self.domain(pos) and other.domain(pos)
-		return SumOfExps(coeffs=coeffs, exponents=exponents, shifts=shifts, domain=domain)
+			o_coeffs, o_exps, o_shifts, o_domain = [val], [0], [0], (lambda _: True)
+		coeffs = np.concatenate((self.coeffs, o_coeffs))
+		exponents = np.concatenate((self.exponents, o_exps))
+		shifts = np.concatenate((self.shifts, o_shifts))
+		return SumOfExps(coeffs=coeffs, exponents=exponents, shifts=shifts,
+		                 domain=_base.combine_domains(self.domain, o_domain))
 
 	def __mul__(self, other):
 		if isinstance(other, SumOfExps):
@@ -303,21 +314,13 @@ class SumOfExps(Funcs1D):
 			safe_exp  = np.where(tiny, 1.0, exp_tot)
 			shift_tot = np.where(tiny, 0.0, weight_shift / safe_exp)
 			coeff_tot = np.where(tiny, coeff_tot * np.exp(-weight_shift), coeff_tot)
-			domain = lambda pos: self.domain(pos) and other.domain(pos)
+			domain = _base.combine_domains(self, other)
 			return SumOfExps(coeffs=coeff_tot.ravel(), exponents=exp_tot.ravel(),
 			                 shifts=shift_tot.ravel(), domain=domain).simplify()
-		elif np.isscalar(other) or (isinstance(other, _base.ConstFunc) and other.output_dim == 1):
-			val = other if np.isscalar(other) else other.const
-			mul_res = self.copy()
-			mul_res.coeffs = val * self.coeffs
-			return mul_res
-		else:
-			return super().__mul__(other)
-
-	def __truediv__(self, other):
-		if np.isscalar(other):
-			return self.__mul__(1.0 / other)
-		return NotImplemented
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(coeffs=val * self.coeffs)
+		return super().__mul__(other)
 
 	def _check_approx(self, result, t_samples, atol, rtol, label):
 		orig = self(t_samples)
@@ -355,7 +358,6 @@ class SumOfExps(Funcs1D):
 		re_arr = np.real(self.exponents)
 		im_arr = np.imag(self.exponents)
 
-		# TODO: Can the following be simplified for exp_threshold=0 case to make it faster?
 		if exp_threshold > 0:
 			keys_re = np.floor(re_arr * 2 / exp_threshold).astype(np.int64)
 			keys_im = np.floor(im_arr * 2 / exp_threshold).astype(np.int64)
@@ -384,7 +386,7 @@ class SumOfExps(Funcs1D):
 		result = SumOfExps(coeffs=new_coeffs, exponents=new_exponents,
 		                   shifts=new_shifts, domain=self.domain)
 
-		if coeff_threshold > 0 and isinstance(result, SumOfExps) and len(result.coeffs) > 0: # TODO: Is len() check stale?
+		if coeff_threshold > 0 and isinstance(result, SumOfExps):
 			abs_c  = np.abs(result.coeffs)
 			mask   = abs_c > coeff_threshold * abs_c.max()
 			result = SumOfExps(coeffs=result.coeffs[mask], exponents=result.exponents[mask],
@@ -396,28 +398,31 @@ class SumOfExps(Funcs1D):
 		return result
 
 	def derivative(self):
-		der_fn = self.copy()
-		der_fn.coeffs = self.exponents * self.coeffs
-		return der_fn
+		return self.clone(coeffs=self.exponents * self.coeffs)
+
+	def antiderivative(self):
+		if np.any(self.exponents == 0):
+			raise NotImplementedError(
+				"SumOfExps with k=0 terms has no SumOfExps antiderivative; "
+				"call integrate(a, b) for a definite integral"
+			)
+		return self.clone(coeffs=self.coeffs / self.exponents)
 
 	def integrate(self, a=None, b=None):
 		if a is None and b is None:
-			if np.any(self.exponents == 0):
-				raise NotImplementedError(
-					"SumOfExps with k=0 terms has no SumOfExps antiderivative; "
-					"call integrate(a, b) for a definite integral"
-				)
-			return SumOfExps(self.coeffs / self.exponents, self.exponents, self.shifts, domain=self.domain)
-		result = 0.0
-		for c, k, s in zip(self.coeffs, self.exponents, self.shifts):
-			if k == 0:
-				result = result + c * (b - a)
-			else:
-				result = result + c / k * (np.exp(k * (b - s)) - np.exp(k * (a - s)))
-		return result
-
-	def copy(self):
-		return SumOfExps(coeffs=self.coeffs.copy(), exponents=self.exponents.copy(), shifts=self.shifts.copy(), domain=self.domain)
+			return self.antiderivative()
+		if a is not None and b is not None:
+			result = 0.0
+			for c, k, s in zip(self.coeffs, self.exponents, self.shifts):
+				if k == 0:
+					result = result + c * (b - a)
+				else:
+					result = result + c / k * (np.exp(k * (b - s)) - np.exp(k * (a - s)))
+			return result
+		raise ValueError(
+			"integrate() takes either no positional arguments (indefinite) "
+			"or exactly two (definite interval [a, b])"
+		)
 
 	def sympy_output(self):
 		x = self.sympy_var

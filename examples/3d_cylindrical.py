@@ -55,7 +55,7 @@ assert np.isclose(df_rho(r0), expected_drho, rtol=1e-10)
 # ------------------------------------------------------------------ Gradient
 # φ-component of ∇f in cylindrical coords = (1/ρ)·∂f/∂φ
 # _gradient_component('phi') uses Bessel recurrences to avoid creating a CoordPow.
-grad_f = Cylindrical3D.gradient(f)
+grad_f = f.gradient()
 from Functions.Functions_Base import VecFunc
 print("\n=== Gradient ∇f in Cylindrical3D ===")
 grad_val = grad_f(r0)     # (3,) array: [∂f/∂ρ, (1/ρ)·∂f/∂φ, ∂f/∂z]

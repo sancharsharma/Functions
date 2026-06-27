@@ -46,7 +46,7 @@ from Functions.Functions_3D import Exp3D, PowerCylindrical
 print("\n=== Gradient: Exp3D in Cartesian3D ===")
 k = np.array([1.0, 0.0, 0.0])
 f_cart = Exp3D(k_vec=k)
-grad_cart = Cartesian3D.gradient(f_cart)
+grad_cart = f_cart.gradient()
 r0_cart = np.array([0.5, 0.3, 0.1])
 gv = grad_cart(r0_cart)
 print("  ∇f(r0) =", gv)
@@ -56,7 +56,7 @@ assert np.allclose(gv, 1j * k * f_cart(r0_cart))
 # Use PowerCylindrical as the test field: g = ρ^1·e^{0·φ}·e^{0·z} = ρ
 print("\n=== Gradient: PowerCylindrical(ρ) in Cylindrical3D ===")
 g_cyl = PowerCylindrical(kz=0, m_azim=0, power=1)  # g = ρ
-grad_cyl = Cylindrical3D.gradient(g_cyl)
+grad_cyl = g_cyl.gradient()
 r0_cyl = np.array([1.5, np.pi/3, 0.0])   # (ρ, φ, z)
 gv2 = grad_cyl(r0_cyl)
 print("  ∇ρ(r0) =", gv2, " [expected (1, 0, 0)]")
@@ -66,8 +66,8 @@ assert np.allclose(gv2, [1, 0, 0], atol=1e-12)
 # ∇²(ρ²) in cylindrical:
 #   (1/ρ)·∂/∂ρ(ρ·2ρ) = (1/ρ)·∂/∂ρ(2ρ²) = 4 = constant
 g2 = PowerCylindrical(kz=0, m_azim=0, power=2)   # g = ρ^2
-grad_g2 = Cylindrical3D.gradient(g2)
-lap_g2 = Cylindrical3D.divergence(grad_g2.components)
+grad_g2 = g2.gradient()
+lap_g2 = grad_g2.divergence(Cylindrical3D)   # or simply g2.laplacian()
 r_pts = np.array([[0.5, 0.0, 0.0],
                    [1.0, 1.0, 2.0],
                    [2.0, np.pi, -1.0]])

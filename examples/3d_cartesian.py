@@ -4,8 +4,8 @@
 Topics:
   - Exp3D construction and evaluation
   - Partial derivatives via .derivative('x') etc.
-  - Gradient via Cartesian3D.gradient(f) → VecFunc
-  - Laplacian via Cartesian3D.laplacian(f)
+  - Gradient via f.gradient() → VecFunc
+  - Laplacian via grad_f.divergence(Cartesian3D) / f.laplacian()
   - Analytical check: ∇²(e^{ik·r}) = -|k|² · e^{ik·r}
 """
 
@@ -47,8 +47,9 @@ assert np.isclose(df_y(r0), 1j*k[1]*f(r0))
 assert np.isclose(df_z(r0), 1j*k[2]*f(r0))
 
 # ------------------------------------------------------------------ Gradient
-# ∇f = i·k · f  (returned as VecFunc with 3 components)
-grad_f = Cartesian3D.gradient(f)
+# ∇f = i·k · f  (returned as VecFunc with 3 components).
+# Gradient is a method on the function; f has a natural coord_sys, so no argument is needed.
+grad_f = f.gradient()
 from Functions.Functions_Base import VecFunc
 print("\n=== Gradient ∇f ===")
 print("  type:", type(grad_f).__name__)
@@ -59,8 +60,9 @@ print("  expected:", expected_grad)
 assert np.allclose(grad_at_r0, expected_grad)
 
 # ------------------------------------------------------------------ Laplacian
-# ∇²f = div(∇f).  divergence() expects a list of components, so pass grad_f.components.
-lap_f = Cartesian3D.divergence(grad_f.components)
+# ∇²f = div(∇f).  divergence() is a method on the vector field; grad_f is a VecFunc with no
+# natural coord_sys, so the system is passed explicitly.  (Equivalently: lap_f = f.laplacian().)
+lap_f = grad_f.divergence(Cartesian3D)
 lap_at_r0 = lap_f(r0)
 print("\n=== Laplacian ∇²f ===")
 print("  ∇²f(r0)   =", lap_at_r0)
