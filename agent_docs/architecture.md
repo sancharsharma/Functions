@@ -99,12 +99,14 @@ the objects are intentionally **unhashable**.
 `RatioOfFuncs.derivative` applies the quotient rule analytically.
 
 `FuncBase.reciprocal()` builds `RatioOfFuncs(ConstFunc(1), self)` (or a vector
-`ConstFunc(ones)` for vector output). `ConstFunc.reciprocal()` and
-`CoordPow.reciprocal()` return analytic inverses directly.
-`ProdOfFuncs.reciprocal()` distributes over factors. `TrigCoord` has no analytic
-reciprocal (csc/sec were removed), so `TrigCoord('sin', …).reciprocal()` falls
-back to the base `RatioOfFuncs(ConstFunc(1), sin)` — this is how the spherical
-`1/(r·sin θ)` scale factor is built in `Polar3D`.
+`ConstFunc(ones)` for vector output). `ConstFunc.reciprocal()` returns an analytic
+inverse directly. `Embed1D.reciprocal()` delegates to its inner 1-D func's
+`reciprocal()` (and `PowFunc.reciprocal()` negates the power analytically), so
+`Embed1D(PowFunc(power=-1), …).reciprocal()` is a clean `PowFunc(power=1)`.
+`ProdOfFuncs.reciprocal()` distributes over factors. `Sin`/`Cos` have no analytic
+reciprocal (csc/sec were removed), so `Embed1D(Sin(), …).reciprocal()` wraps the
+base `RatioOfFuncs(ConstFunc(1), sin)` — this is how the spherical `1/(r·sin θ)`
+scale factor is built in `Polar3D`.
 
 ## Dimension compatibility — `_check_dim_compat(funcs, mode)`
 
@@ -131,13 +133,13 @@ the `(N, k)` vector rather than along the sample axis.
 
 Several classes simplify on construction in `__new__`:
 - `ConstFunc(0)` → `ZeroFunc`
-- `CoordPow(..., power=0)` → `ConstFunc(1)`
+- `Embed1D(ZeroFunc, …)` → `ZeroFunc`; `Embed1D(ConstFunc(c), …)` → `ConstFunc(c)` (so `Embed1D(PowFunc(power=0), …)` collapses, since `PowFunc(power=0)` → `ConstFunc`)
 - `ComposedFunc` with constant inner/outer → `ConstFunc`
 - `SumOfFuncs([])` → `ZeroFunc`; `SumOfFuncs([f])` → `f`
 - `ProdOfFuncs([])` → `ConstFunc(1)`; `ProdOfFuncs([f])` → `f`
 - `RatioOfFuncs(ZeroFunc, g)` → `ZeroFunc`; `/ZeroFunc` → `ZeroDivisionError`; `/ConstFunc` → scaled copy
-- `ExpFunc(ampl=0)`, `PowFunc(ampl=0)`, `PolyFunc(all-zero)`, `SumOfExps(all-zero)` → `ZeroFunc`
-- `ExpFunc(k=0)` → `ConstFunc(ampl)`
+- `ExpFunc(ampl=0)`, `PowFunc(ampl=0)`, `Sin(ampl=0)`/`Cos(ampl=0)`, `Sin(k=0)`, `PolyFunc(all-zero)`, `SumOfExps(all-zero)` → `ZeroFunc`
+- `ExpFunc(k=0)`, `Cos(k=0)`, `PowFunc(power=0)` → `ConstFunc(ampl)`
 - `SumOfExps` with a single term → `ExpFunc` (which may itself collapse to `ConstFunc`)
 
 ## Domain checking
@@ -191,7 +193,7 @@ analytic antiderivative; `SumOfExps` computes the definite integral term-by-term
 | Class | `antiderivative()` returns | Edge case |
 |---|---|---|
 | `ZeroFunc` | `ZeroFunc` (copy) | — |
-| `ConstFunc` | `const * CoordPow(x)` (i.e. `const·x`) | non-1D (`input_dim≠1` or `output_dim≠1`) raises |
+| `ConstFunc` | `PowFunc(power=1, ampl=const)` (i.e. `const·x`) | non-1D (`input_dim≠1` or `output_dim≠1`) raises |
 | `ExpFunc` | `ExpFunc(k, ampl/k, shift)` | `k=0` never reaches here (collapses to `ConstFunc` at construction) |
 | `PowFunc` | `PowFunc(power+1, ampl/(power+1))` | power=−1 raises; definite falls to numerical |
 | `PolyFunc` | `PolyFunc` with antiderivative coefficients `[0, c₀, c₁/2, …]` | — |
@@ -226,7 +228,7 @@ Supports:
 The base method returns `NotImplemented`, so the default falls back to
 `inv_h * self.derivative(coord)`. Override `_gradient_component` on a class to
 absorb scale factors analytically (e.g. `Cylindrical._gradient_component('phi')`
-uses Bessel recurrences to cancel the `1/ρ` factor without creating a `CoordPow`
+uses Bessel recurrences to cancel the `1/ρ` factor without creating a `Embed1D`
 product). A hook may **selectively** return `NotImplemented` to use the fallback
 for cases it cannot handle: `Cylindrical` does this for `order == 0` (the
 recurrence needs `1/(2·order)`), so the `1/ρ · ∂_φ` term is still produced
@@ -240,16 +242,41 @@ returns `NotImplemented` if any term returns `NotImplemented`.
 `Funcs3D.derivative(coord)` looks up `_deriv_{coord}(self)` by name (e.g.
 `_deriv_rho`, `_deriv_phi`, `_deriv_z`). Known but unimplemented coordinates
 raise `NotImplementedError`; unknown names raise `ValueError`. Known
-coordinates: `{'x', 'y', 'z', 'rho', 'phi', 'r', 'theta'}`.
+coordinates: `{'x', 'y', 'z', 'rho', 'phi', 'r', 'theta'}`. The separable
+classes (built on `_SeparableMixin`, see below) instead inherit the mixin's
+`derivative(coord)`, which honours any `_deriv_{coord}` override but otherwise
+falls back to the product-rule derivative of the lifted factors — so they need
+*no* per-coordinate `_deriv_` methods.
 
 `Funcs2D` is the same machinery at `input_dim=2` (its own `_KNOWN_COORDS =
 {'x', 'y', 'rho', 'phi', 'r'}`). The 2D leaf classes parallel the 3D ones:
 `Exp2D` (Cartesian2D, like `Exp3D`), `PolarPower` (Polar2D, like
-`PowerCylindrical`), and `PolarBessel` (Polar2D, like `Cylindrical` — same
-Bessel J/Y/I/K recurrences for `_deriv_r` and the `_gradient_component('phi')`
-1/r absorption, minus the z dependence). `numerical_laplacian` is
-dimension-generic (it reads `n = len(coord_sys.coords)` off the system), so the
-2D and 3D copies are identical aside from the surrounding class.
+`PowerCylindrical`), and `PolarBessel` (Polar2D, like `Cylindrical` — minus the
+z dependence; it keeps the `_gradient_component('phi')` 1/r Bessel absorption).
+`numerical_laplacian` is dimension-generic (it reads `n = len(coord_sys.coords)`
+off the system), so the 2D and 3D copies are identical aside from the
+surrounding class.
+
+## Separable functions (`_SeparableMixin` / `SeparableFunc`)
+
+Every 2D/3D leaf class factorises into one 1-D factor per coordinate, so they
+are defined with the `_SeparableMixin` Template-Method helper rather than by
+hand. A separable class is `class Foo(_base._SeparableMixin, Funcs2D|Funcs3D)`:
+it sets `coord_sys` + its constructor params and implements the single hook
+`_factors()` returning the per-coordinate 1-D `FuncBase`s in `coord_sys.coords`
+order (e.g. `Cylindrical._factors()` → `[Bessel1D(...), ExpFunc(1j·m),
+ExpFunc(1j·kz)]`). The mixin derives, via `self._lifted()` (a cached
+`ampl · prod(Embed1D(factor_i, axis_i))`): `_eval`, `sympy_output`,
+`derivative(coord)` (the `Embed1D` product rule — every factor but one
+differentiates to `ZeroFunc` on a given axis, so the sum collapses to the one
+non-zero term), and scalar `__mul__` (folds into `self.ampl`). Funcs2D/3D still
+provides `coord_sys`/`__call__`/`numerical_laplacian`. Subclasses keep whatever
+is genuinely class-specific: `_gradient_component` (the 1/ρ Bessel/​power
+absorption), `increased_order`/`reduced_order`, same-type `__add__`. The radial
+Bessel recurrence now lives in the 1-D `Bessel1D.derivative()`; the lift carries
+it up automatically. The public `SeparableFunc(factors, coord_sys=None)` is the
+ad-hoc builder (the same mixin over `FuncBase`) for combining 1-D functions with
+no extra structure; `_SeparableMixin` itself is unexported.
 
 ## Adding a new function class
 
@@ -271,3 +298,9 @@ dimension-generic (it reads `n = len(coord_sys.coords)` off the system), so the
 5. For 3D: add `_deriv_{coord}` methods for each supported coordinate; add
    `coord_sys` as a class attribute; implement `_gradient_component` if analytic
    scale-factor cancellation is possible.
+6. **If the new class is separable** (a product of one 1-D factor per
+   coordinate), don't write `_eval`/`sympy_output`/`_deriv_{coord}` by hand:
+   subclass `(_base._SeparableMixin, Funcs2D|Funcs3D)`, set `coord_sys` + params,
+   and implement only `_factors()` (see the Separable functions section). Add any
+   needed 1-D factor to `Functions_1D.py` first (e.g. `Bessel1D`). You still get
+   to override `_gradient_component`/`__add__` for class-specific behaviour.

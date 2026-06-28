@@ -3,6 +3,7 @@ import functools
 from collections import deque
 from dataclasses import dataclass
 from . import Functions_Base as _base
+from . import Functions_1D as _f1
 
 
 def _coord_transform(func):
@@ -127,19 +128,19 @@ Cartesian3D = CoordSystem(
 Cylindrical3D = CoordSystem(
 	name='cylindrical',
 	coords=['rho', 'phi', 'z'],
-	inv_scale_factors=[_base.ConstFunc(1, input_dim=3), _base.CoordPow(input_dim=3, coord_index=0, power=-1, coord_name='rho'), _base.ConstFunc(1, input_dim=3)],
+	inv_scale_factors=[_base.ConstFunc(1, input_dim=3), _base.Embed1D(_f1.PowFunc(power=-1), input_dim=3, coord_index=0, coord_name='rho'), _base.ConstFunc(1, input_dim=3)],
 )
 
 Polar2D = CoordSystem(
 	name='polar',
 	coords=['r', 'phi'],
-	inv_scale_factors=[_base.ConstFunc(1, input_dim=2), _base.CoordPow(input_dim=2, coord_index=0, power=-1, coord_name='r')],
+	inv_scale_factors=[_base.ConstFunc(1, input_dim=2), _base.Embed1D(_f1.PowFunc(power=-1), input_dim=2, coord_index=0, coord_name='r')],
 )
 
 Cylindrical2D = CoordSystem(
 	name='cylindrical2d',
 	coords=['rho', 'phi'],
-	inv_scale_factors=[_base.ConstFunc(1, input_dim=2), _base.CoordPow(input_dim=2, coord_index=0, power=-1, coord_name='rho')],
+	inv_scale_factors=[_base.ConstFunc(1, input_dim=2), _base.Embed1D(_f1.PowFunc(power=-1), input_dim=2, coord_index=0, coord_name='rho')],
 )
 
 Polar3D = CoordSystem(
@@ -147,8 +148,8 @@ Polar3D = CoordSystem(
 	coords=['r', 'theta', 'phi'],
 	inv_scale_factors=[
 		_base.ConstFunc(1, input_dim=3),
-		_base.CoordPow(input_dim=3, coord_index=0, power=-1, coord_name='r'),
-		_base.CoordPow(input_dim=3, coord_index=0, power=-1, coord_name='r') * _base.TrigCoord('sin', input_dim=3, coord_index=1, coord_name='theta').reciprocal(),
+		_base.Embed1D(_f1.PowFunc(power=-1), input_dim=3, coord_index=0, coord_name='r'),
+		_base.Embed1D(_f1.PowFunc(power=-1), input_dim=3, coord_index=0, coord_name='r') * _base.Embed1D(_f1.Sin(), input_dim=3, coord_index=1, coord_name='theta').reciprocal(),
 	],
 )
 

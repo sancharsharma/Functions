@@ -1,9 +1,7 @@
 import numpy as np
-import scipy.special as spec
-import sympy as sym
 from . import Functions_Base as _base
 from . import CoordSystems as _coords
-import sympy.functions.special.bessel as bessel
+from .Functions_1D import ExpFunc, PowFunc, Bessel1D
 
 _KNOWN_COORDS = frozenset({'x', 'y', 'z', 'rho', 'phi', 'r', 'theta'})
 
@@ -75,7 +73,7 @@ class Funcs3D(_base.FuncBase):
 
 
 ################
-class Exp3D(Funcs3D):
+class Exp3D(_base._SeparableMixin, Funcs3D):
 
 	coord_sys = _coords.Cartesian3D
 
@@ -90,40 +88,20 @@ class Exp3D(Funcs3D):
 		self.ampl = ampl
 		self.parameters = {'k_vec': self.k_vec, 'ampl': ampl, 'domain': domain}
 
-	def _eval(self, pos_arr):
-		phase = np.dot(pos_arr, self.k_vec)
-		return self.ampl * np.exp(1j * phase)
+	def _factors(self):
+		# Separable: e^(i·kx·x) · e^(i·ky·y) · e^(i·kz·z), one factor per [x, y, z].
+		return [ExpFunc(k=1j * ki) for ki in self.k_vec]
 
 	def __add__(self, other):
 		if isinstance(other, Exp3D) and np.array_equal(self.k_vec, other.k_vec):
 			return Exp3D(self.k_vec, ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
-	def _deriv_x(self):
-		return self.clone(ampl=1j * self.k_vec[0] * self.ampl)
-
-	def _deriv_y(self):
-		return self.clone(ampl=1j * self.k_vec[1] * self.ampl)
-
-	def _deriv_z(self):
-		return self.clone(ampl=1j * self.k_vec[2] * self.ampl)
-
-	def sympy_output(self):
-		x, y, z = sym.symbols('x y z', real=True)
-		phase = sum((ki*ci for ki, ci in zip(self.k_vec, [x, y, z])), sym.S.Zero)
-		return self.ampl * sym.exp(sym.I * phase)
-
 
 ################
 # The function bess_fn(scale*rho) * e^(i*m_azim*phi) * e^(i*kz*z)
 # bessel = [fn, order, scale] where fn in {'J','Y','I','K'} and the function is fn(order, scale*rho)
-class Cylindrical(Funcs3D):
+class Cylindrical(_base._SeparableMixin, Funcs3D):
 
 	coord_sys = _coords.Cylindrical3D
 
@@ -145,39 +123,11 @@ class Cylindrical(Funcs3D):
 						   'bessel': [self.bessel_name, self.order, self.scale],
 						   'ampl': ampl, 'domain': domain}
 
-		match bessel[0]:
-			case 'J':
-				self.bess_fn = spec.jv
-			case 'Y':
-				self.bess_fn = spec.yn if isinstance(self.order, int) else spec.yv
-			case 'I':
-				self.bess_fn = spec.iv
-			case 'K':
-				self.bess_fn = spec.kn if isinstance(self.order, int) else spec.kv
-			case _:
-				raise ValueError(f"Unknown Bessel function '{bessel[0]}', expected one of 'J', 'Y', 'I', 'K'")
-
-	def _eval(self, pos_arr):
-		bess_out = self.bess_fn(self.order, self.scale*pos_arr[:,0])
-		azim_out = np.exp(1j*self.m_azim*pos_arr[:,1])
-		z_out    = np.exp(1j*self.kz*pos_arr[:,2])
-		return self.ampl*bess_out*azim_out*z_out
-
-	def _deriv_rho(self):
-		if self.bessel_name in ['J','Y']:
-			ampl_minus, ampl_plus = 1, -1
-		elif self.bessel_name == 'I':
-			ampl_minus, ampl_plus = 1, 1
-		elif self.bessel_name == 'K':
-			ampl_minus, ampl_plus = -1, -1
-		else:
-			raise ValueError(f"Unknown Bessel function: {self.bessel_name}")
-		return (ampl_plus*self.scale/2)*self.increased_order() + (ampl_minus*self.scale/2)*self.reduced_order()
-
-	def _deriv_phi(self):
-		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
-		return 1j * self.m_azim * self
+	def _factors(self):
+		# Separable: Bessel(scale·rho) · e^(i·m·phi) · e^(i·kz·z), one factor per [rho, phi, z]. _eval/derivative/sympy_output are derived from these by _SeparableMixin.
+		return [Bessel1D(self.bessel_name, self.order, self.scale),
+				ExpFunc(k=1j * self.m_azim),
+				ExpFunc(k=1j * self.kz)]
 
 	def _gradient_component(self, coord):
 		if coord == 'phi':
@@ -199,9 +149,6 @@ class Cylindrical(Funcs3D):
 			return (ampl*ampl_plus)*self.increased_order() + (ampl*ampl_minus)*self.reduced_order()
 		return NotImplemented
 
-	def _deriv_z(self):
-		return 1j*self.kz*self
-
 	def __add__(self, other):
 		if (isinstance(other, Cylindrical)
 				and self.kz == other.kz and self.m_azim == other.m_azim
@@ -212,28 +159,16 @@ class Cylindrical(Funcs3D):
 							   ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
 	def reduced_order(self):
 		return self.clone(bessel=[self.bessel_name, self.order - 1, self.scale])
 
 	def increased_order(self):
 		return self.clone(bessel=[self.bessel_name, self.order + 1, self.scale])
 
-	def sympy_output(self):
-		rho, phi, z = sym.symbols('rho phi z', real=True)
-		bessel_map = {'J': bessel.besselj, 'Y': bessel.bessely, 'I': bessel.besseli, 'K': bessel.besselk}
-		fun = bessel_map[self.bessel_name]
-		return self.ampl * fun(self.order, self.scale*rho) * sym.exp(sym.I*self.kz*z) * sym.exp(sym.I*self.m_azim*phi)
-
 
 ################
 # The function ampl * rho^power * e^(i*m_azim*phi) * e^(i*kz*z)
-class PowerCylindrical(Funcs3D):
+class PowerCylindrical(_base._SeparableMixin, Funcs3D):
 
 	coord_sys = _coords.Cylindrical3D
 
@@ -250,27 +185,13 @@ class PowerCylindrical(Funcs3D):
 		self.ampl = ampl
 		self.parameters = {'kz': kz, 'm_azim': m_azim, 'power': power, 'ampl': ampl, 'domain': domain}
 
-	def _eval(self, pos_arr):
-		rho_out  = pos_arr[:,0] ** self.power
-		azim_out = np.exp(1j * self.m_azim * pos_arr[:,1])
-		z_out    = np.exp(1j * self.kz * pos_arr[:,2])
-		return self.ampl * rho_out * azim_out * z_out
-
-	def _deriv_rho(self):
-		if self.power == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
-		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
-
-	def _deriv_z(self):
-		return self.clone(ampl=1j * self.kz * self.ampl)
-
-	def _deriv_phi(self):
-		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=3)
-		return 1j * self.m_azim * self
+	def _factors(self):
+		# Separable: rho^power · e^(i·m·phi) · e^(i·kz·z), one factor per [rho, phi, z].
+		return [PowFunc(self.power), ExpFunc(k=1j * self.m_azim), ExpFunc(k=1j * self.kz)]
 
 	def _gradient_component(self, coord):
 		if coord == 'phi':
+			# (1/rho)·∂_φ f absorbs the scale factor analytically: drops the power by one.
 			if self.m_azim == 0:
 				return _base.ZeroFunc(domain=self.domain, input_dim=3)
 			return self.clone(power=self.power - 1, ampl=1j * self.m_azim * self.ampl)
@@ -283,13 +204,3 @@ class PowerCylindrical(Funcs3D):
 			return PowerCylindrical(self.kz, self.m_azim, power=self.power,
 									ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
-
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
-	def sympy_output(self):
-		rho, phi, z = sym.symbols('rho phi z', real=True)
-		return self.ampl * rho**self.power * sym.exp(sym.I*self.m_azim*phi) * sym.exp(sym.I*self.kz*z)

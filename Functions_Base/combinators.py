@@ -4,7 +4,7 @@ import numpy as np
 import sympy as sym
 
 from .func_base import FuncBase, _check_dim_compat, combine_domains, scalar_factor, _fuse_pairwise, _SENTINEL
-from .leaves import ZeroFunc, ConstFunc
+from .leaves import ZeroFunc, ConstFunc, Embed1D
 
 ######### Different ways to combine functions
 
@@ -296,3 +296,72 @@ class VecFunc(FuncBase):
 
 	def simplify(self, deep=False):
 		return VecFunc([f.simplify(deep=deep) if hasattr(f, 'simplify') else f for f in self.components])
+
+
+######### Separable functions: a product of one 1-D factor per coordinate
+
+class _SeparableMixin:
+	"""Template-Method helper for separable functions: a function that factorises into one 1-D factor per coordinate of its ``coord_sys``, each lifted onto its axis with ``Embed1D``, times an optional scalar ``self.ampl``. A subclass implements the single hook ``_factors()`` (the per-coordinate 1-D ``FuncBase`` objects, in ``coord_sys.coords`` order) and inherits ``_eval``, ``sympy_output``, the per-coordinate ``derivative(coord)``, and scalar multiplication — all derived from the factors. It deliberately supplies *no* ``coord_sys``/``__call__``/``numerical_laplacian``: domain classes mix it with ``Funcs2D``/``Funcs3D`` (which provide those), e.g. ``class Cylindrical(_SeparableMixin, Funcs3D)``; the public ``SeparableFunc`` mixes it with ``FuncBase``. Subclasses stay free to override ``_deriv_{coord}`` (closed forms), ``_gradient_component`` (analytic scale-factor absorption), ``__add__``, etc."""
+
+	def _factors(self):
+		raise NotImplementedError(f"{type(self).__name__} must implement _factors()")
+
+	def _lifted(self):
+		"""The function rebuilt as ``ampl * prod(Embed1D(factor_i, axis_i))`` — a plain ProdOfFuncs whose product-rule derivative/_eval/sympy_output the mixin reuses. Cached per instance (clone() starts fresh)."""
+		cached = self.__dict__.get('_lifted_cache')
+		if cached is not None:
+			return cached
+		factors = self._factors()
+		n = self.input_dim
+		coord_sys = getattr(self, 'coord_sys', None)
+		names = coord_sys.coords if coord_sys is not None else [f'x{i}' for i in range(n)]
+		parts = [Embed1D(f, input_dim=n, coord_index=i, coord_name=name)
+				 for i, (name, f) in enumerate(zip(names, factors))]
+		result = getattr(self, 'ampl', 1) * math.prod(parts)
+		self.__dict__['_lifted_cache'] = result
+		return result
+
+	def _eval(self, pos_arr):
+		return self._lifted()._eval(pos_arr)
+
+	def sympy_output(self):
+		return self._lifted().sympy_output()
+
+	def derivative(self, coord):
+		method = getattr(self, f'_deriv_{coord}', None)
+		if method is not None:
+			return method()
+		return self._lifted().derivative(coord)
+
+	def __mul__(self, other):
+		# Fold a scalar into ampl (keeps the result a separable function of the same class);
+		# everything else defers to the concrete base (→ ProdOfFuncs etc.).
+		val = scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * getattr(self, 'ampl', 1))
+		return super().__mul__(other)
+
+
+class SeparableFunc(_SeparableMixin, FuncBase):
+	"""Public ad-hoc separable function: combine 1-D functions into an n-D one, one factor per coordinate — ``SeparableFunc([fx, fy, fz], coord_sys=Cartesian3D)``. With a ``coord_sys`` the factors bind to its coordinate names, enabling ``gradient``/``divergence``/``laplacian`` and ``derivative(coord)`` by name; without one they bind to ``x0, x1, …`` and only evaluation and ``derivative('x0')`` etc. work (differential operators raise, like any bare combinator). Unlike the domain classes there is no extra structure; subclass ``_SeparableMixin`` directly for that."""
+
+	def __init__(self, factors, coord_sys=None, ampl=1, domain=lambda _: True):
+		factors = list(factors)
+		if coord_sys is not None and len(factors) != len(coord_sys.coords):
+			raise ValueError(f"SeparableFunc: got {len(factors)} factors but coord_sys '{coord_sys.name}' has {len(coord_sys.coords)} coordinates")
+		if coord_sys is not None:
+			self.coord_sys = coord_sys
+		self.ampl = ampl
+		self._factor_list = factors
+		super().__init__(domain=domain, input_dim=len(factors), output_dim=1)
+		self.parameters = {'factors': factors, 'coord_sys': coord_sys, 'ampl': ampl, 'domain': domain}
+
+	def _factors(self):
+		return self._factor_list
+
+	def clone(self, **overrides):
+		factors = overrides.get('factors', [f.copy() for f in self._factor_list])
+		coord_sys = overrides.get('coord_sys', getattr(self, 'coord_sys', None))
+		ampl = overrides.get('ampl', self.ampl)
+		domain = overrides.get('domain', self.domain)
+		return SeparableFunc(factors, coord_sys=coord_sys, ampl=ampl, domain=domain)

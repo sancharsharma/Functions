@@ -50,7 +50,7 @@ class ZeroFunc(FuncBase):
 			return sym.zeros(self.output_dim, 1)
 		return sym.Integer(0)
 
-	def simplify(self, _deep=False):
+	def simplify(self, deep=False):
 		return self
 
 
@@ -116,7 +116,8 @@ class ConstFunc(FuncBase):
 			raise NotImplementedError(
 				"antiderivative is only defined for 1D scalar functions (input_dim=output_dim=1)"
 			)
-		return self.const * CoordPow(1, 0, 1, coord_name='x')
+		from ..Functions_1D import PowFunc   # deferred: breaks the Functions_Base ↔ Functions_1D import cycle
+		return PowFunc(power=1, ampl=self.const)
 
 	def sympy_output(self):
 		if self.output_dim == 1:
@@ -124,69 +125,38 @@ class ConstFunc(FuncBase):
 		return sym.Matrix(self.const.tolist())
 
 
-######### Coordinate transformation functions
-class CoordPow(FuncBase):
-	"""pos[coord_index]^power for any input_dim — used as coordinate scale factors in CoordSystem."""
+######### Lifting a 1-D function into n dimensions
+class Embed1D(FuncBase):
+	"""Lift a 1-D function into an ``input_dim``-dimensional one by evaluating it on a single coordinate: ``Embed1D(f, n, i)(pos) = f(pos[i])``. The wrapped ``func`` is always a 1-D function (input_dim=1, e.g. ``PowFunc``, ``Sin``, ``Cos``); this class supplies the column extraction, the partial-derivative dispatch on ``coord_name`` (the embedded variable; every other coordinate differentiates to zero), and the SymPy variable relabelling. Its internals (``_func``, ``_coord_index``, ``_coord_name``) are implementation detail. As the embedding is linear and identity-preserving, a zero/constant inner func lifts to ``ZeroFunc``/``ConstFunc`` (collapsed in ``__new__``). Coordinate scale factors in CoordSystem are built from it."""
 
-	def __new__(cls, input_dim, coord_index, power=1, coord_name=None, domain=lambda _: True):
-		if power == 0:
-			return ConstFunc(1, domain=domain, input_dim=input_dim)
+	def __new__(cls, func, input_dim, coord_index, coord_name=None, domain=lambda _: True):
+		if isinstance(func, ZeroFunc):
+			return ZeroFunc(domain=domain, input_dim=input_dim)
+		if isinstance(func, ConstFunc):
+			return ConstFunc(func.const, domain=domain, input_dim=input_dim)
 		return object.__new__(cls)
 
-	def __init__(self, input_dim, coord_index, power=1, coord_name=None, domain=lambda _: True):
+	def __init__(self, func, input_dim, coord_index, coord_name=None, domain=lambda _: True): # TODO: Should domain be given or inferred from func? Or should we combine the two domains?
 		super().__init__(domain=domain, input_dim=input_dim, output_dim=1)
-		self.coord_index = coord_index
-		self.power = power
-		self.coord_name = coord_name if coord_name is not None else f'x{coord_index}'
-		self.parameters = {'input_dim': input_dim, 'coord_index': coord_index, 'power': power,
-						   'coord_name': self.coord_name, 'domain': domain}
+		self._func = func
+		self._coord_index = coord_index
+		self._coord_name = coord_name if coord_name is not None else f'x{coord_index}'
+		self.parameters = {'func': func, 'input_dim': input_dim, 'coord_index': coord_index, 'coord_name': self._coord_name, 'domain': domain}
 
 	def _eval(self, pos_arr):
-		col = pos_arr if self.input_dim == 1 else pos_arr[:, self.coord_index]
-		return col ** self.power
+		col = pos_arr if self.input_dim == 1 else pos_arr[:, self._coord_index]
+		return self._func._eval(col)
 
 	def derivative(self, coord, *args, **kwargs):
-		if coord == self.coord_name:
-			return self.power * self.clone(power=self.power - 1)
+		if coord == self._coord_name:
+			return self.clone(func=self._func.derivative())
 		return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=1)
 
 	def reciprocal(self):
-		return self.clone(power=-self.power)
+		return self.clone(func=self._func.reciprocal())
 
 	def sympy_output(self):
-		return sym.Symbol(self.coord_name, real=True) ** self.power
-
-
-class TrigCoord(FuncBase):
-	"""sin or cos of one coordinate of a multi-dimensional input. (csc/sec were removed; take the
-	reciprocal of a TrigCoord to get 1/sin or 1/cos as a RatioOfFuncs.)"""
-
-	_funcs = ('sin', 'cos')
-
-	def __init__(self, func, input_dim, coord_index, coord_name=None, domain=lambda _: True):
-		if func not in self._funcs:
-			raise ValueError(f"TrigCoord func must be one of {list(self._funcs)}, got '{func}'")
-		super().__init__(domain=domain, input_dim=input_dim, output_dim=1)
-		self.func = func
-		self.coord_index = coord_index
-		self.coord_name = coord_name if coord_name is not None else f'x{coord_index}'
-		self.parameters = {'func': func, 'input_dim': input_dim, 'coord_index': coord_index,
-						   'coord_name': self.coord_name, 'domain': domain}
-
-	def _eval(self, pos_arr):
-		col = pos_arr[:, self.coord_index]
-		return np.sin(col) if self.func == 'sin' else np.cos(col)
-
-	def derivative(self, coord, *args, **kwargs):
-		if coord != self.coord_name:
-			return ZeroFunc(domain=self.domain, input_dim=self.input_dim, output_dim=1)
-		if self.func == 'sin':
-			return self.clone(func='cos')
-		return ConstFunc(-1, input_dim=self.input_dim) * self.clone(func='sin')
-
-	def sympy_output(self):
-		s = sym.Symbol(self.coord_name, real=True)
-		return sym.sin(s) if self.func == 'sin' else sym.cos(s)
+		return self._func.sympy_output().subs(sym.Symbol('x', real=True), sym.Symbol(self._coord_name, real=True))
 
 
 # ConstFunc.__mul__ builds a ProdOfFuncs by name; deferred to module-bottom to break the import

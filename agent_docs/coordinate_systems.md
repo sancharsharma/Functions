@@ -1,7 +1,7 @@
 # Coordinate systems & specialised classes
 
 Load this when working with coordinate systems, differential operators in
-curvilinear coordinates, `CoordPoint` conversions, `TrigCoord`, or `SumOfExps`.
+curvilinear coordinates, `CoordPoint` conversions, `Embed1D`, or `SumOfExps`.
 
 ## `CoordSystem` — pure metric data
 
@@ -69,13 +69,11 @@ numerically using a second-order finite-difference stencil in curvilinear
 coordinates; accepts `coord_sys` as a string (looked up via `_COORD_REGISTRY`)
 or a `CoordSystem` object.
 
-## `TrigCoord`
+## `Embed1D`
 
-`TrigCoord(func, input_dim, coord_index)` evaluates `sin` or `cos` of one
-coordinate (csc/sec were removed). `derivative(coord)` returns the analytic
-derivative. There is no `reciprocal()` override, so `TrigCoord('sin', …).reciprocal()`
-returns the base `RatioOfFuncs(ConstFunc(1), sin)` — this is how the `1/(r·sin θ)`
-scale factor in `Polar3D` is built.
+`Embed1D(func, input_dim, coord_index, coord_name=None)` **lifts a 1-D function into `input_dim` dimensions** by evaluating it on one coordinate: `Embed1D(func, n, i)(pos) = func(pos[i])`. The wrapped `func` is always a 1-D function (input_dim=1, e.g. `PowFunc`, `Sin`, `Cos`). It owns the column extraction, the partial-derivative dispatch (`derivative(coord)` returns `clone(func=func.derivative())` when `coord == coord_name` — the embedded variable — else `ZeroFunc`), and the SymPy variable relabelling (`func.sympy_output()` with `x` substituted by the coordinate symbol). The internals (`_func`, `_coord_index`, `_coord_name`) are private. The embedding is linear and identity-preserving, so a zero/constant inner func lifts to `ZeroFunc`/`ConstFunc` (collapsed in `__new__`).
+
+Scale factors are built from it: cylindrical `1/h_phi = 1/ρ` is `Embed1D(PowFunc(power=-1), input_dim=3, coord_index=0, coord_name='rho')`. `reciprocal()` delegates to the inner func, so a power inverts cleanly; `Sin`/`Cos` have no analytic reciprocal (csc/sec were removed), so `Embed1D(Sin(), …).reciprocal()` wraps the base `RatioOfFuncs(ConstFunc(1), sin)` — this is how the spherical `1/(r·sin θ)` scale factor in `Polar3D` is built.
 
 ## `SumOfExps`
 

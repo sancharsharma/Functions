@@ -1,6 +1,8 @@
 
 import numpy as np
+import scipy.special as spec
 import sympy as sym
+import sympy.functions.special.bessel as bessel
 from . import Functions_Base as _base
 
 
@@ -114,6 +116,8 @@ class PowFunc(Funcs1D):
 	def __new__(cls, power, ampl=1, domain=lambda _: True):
 		if ampl == 0:
 			return _base.ZeroFunc(domain=domain, input_dim=1)
+		if power == 0:
+			return _base.ConstFunc(ampl, domain=domain, input_dim=1)
 		return object.__new__(cls)
 
 	def __init__(self, power, ampl=1, domain=lambda _: True):
@@ -138,9 +142,11 @@ class PowFunc(Funcs1D):
 			return PowFunc(self.power + other.power, ampl=self.ampl * other.ampl, domain=_base.combine_domains(self, other))
 		return super().__mul__(other)
 
+	def reciprocal(self):
+		return self.clone(power=-self.power, ampl=1 / self.ampl)
+
 	def derivative(self):
-		if self.power == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=1)
+		# power == 0 never occurs: PowFunc.__new__ collapses it to ConstFunc, whose derivative is ZeroFunc.
 		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
 
 	def antiderivative(self):
@@ -154,6 +160,76 @@ class PowFunc(Funcs1D):
 	def sympy_output(self):
 		x = self.sympy_var
 		return sym.sympify(self.ampl) * x ** self.power
+
+
+################
+# ampl * sin(k * x)
+class Sin(Funcs1D):
+
+	def __new__(cls, k=1, ampl=1, domain=lambda _: True):
+		if ampl == 0 or k == 0:
+			return _base.ZeroFunc(domain=domain, input_dim=1)
+		return object.__new__(cls)
+
+	def __init__(self, k=1, ampl=1, domain=lambda _: True):
+		super().__init__(domain=domain)
+		self.k = k
+		self.ampl = ampl
+		self.parameters = {'k': k, 'ampl': ampl, 'domain': domain}
+
+	def _eval(self, pos_arr):
+		return self.ampl * np.sin(self.k * pos_arr)
+
+	def __mul__(self, other):
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
+		return super().__mul__(other)
+
+	def derivative(self):
+		return Cos(k=self.k, ampl=self.ampl * self.k)
+
+	def antiderivative(self):
+		return -Cos(k=self.k, ampl=self.ampl / self.k)
+
+	def sympy_output(self):
+		return sym.sympify(self.ampl) * sym.sin(sym.sympify(self.k) * self.sympy_var)
+
+
+################
+# ampl * cos(k * x)
+class Cos(Funcs1D):
+
+	def __new__(cls, k=1, ampl=1, domain=lambda _: True):
+		if ampl == 0:
+			return _base.ZeroFunc(domain=domain, input_dim=1)
+		if k == 0:
+			return _base.ConstFunc(ampl, domain=domain, input_dim=1)
+		return object.__new__(cls)
+
+	def __init__(self, k=1, ampl=1, domain=lambda _: True):
+		super().__init__(domain=domain)
+		self.k = k
+		self.ampl = ampl
+		self.parameters = {'k': k, 'ampl': ampl, 'domain': domain}
+
+	def _eval(self, pos_arr):
+		return self.ampl * np.cos(self.k * pos_arr)
+
+	def __mul__(self, other):
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
+		return super().__mul__(other)
+
+	def derivative(self):
+		return -Sin(k=self.k, ampl=self.ampl * self.k)
+
+	def antiderivative(self):
+		return Sin(k=self.k, ampl=self.ampl / self.k)
+
+	def sympy_output(self):
+		return sym.sympify(self.ampl) * sym.cos(sym.sympify(self.k) * self.sympy_var)
 
 
 ################
@@ -225,6 +301,66 @@ class PolyFunc(Funcs1D):
 		return sum(sym.sympify(float(c)) * x**i for i, c in enumerate(self.coeffs) if c != 0)
 
 
+
+
+################
+# ampl * bess_fn(order, scale*x), the radial Bessel factor; bess_fn in {'J','Y','I','K'}.
+class Bessel1D(Funcs1D):
+
+	def __new__(cls, name, order, scale=1, ampl=1, domain=lambda _: True):
+		if ampl == 0:
+			return _base.ZeroFunc(domain=domain, input_dim=1)
+		return object.__new__(cls)
+
+	def __init__(self, name, order, scale=1, ampl=1, domain=lambda _: True):
+		super().__init__(domain=domain)
+		self.name = name
+		self.order = order
+		self.scale = scale
+		self.ampl = ampl
+		self.parameters = {'name': name, 'order': order, 'scale': scale, 'ampl': ampl, 'domain': domain}
+
+		match name:
+			case 'J':
+				self.bess_fn = spec.jv
+			case 'Y':
+				self.bess_fn = spec.yn if isinstance(order, int) else spec.yv
+			case 'I':
+				self.bess_fn = spec.iv
+			case 'K':
+				self.bess_fn = spec.kn if isinstance(order, int) else spec.kv
+			case _:
+				raise ValueError(f"Unknown Bessel function '{name}', expected one of 'J', 'Y', 'I', 'K'")
+
+	def _eval(self, pos_arr):
+		return self.ampl * self.bess_fn(self.order, self.scale * pos_arr)
+
+	def __mul__(self, other):
+		val = _base.scalar_factor(other)
+		if val is not None:
+			return self.clone(ampl=val * self.ampl)
+		return super().__mul__(other)
+
+	def reduced_order(self):
+		return self.clone(order=self.order - 1)
+
+	def increased_order(self):
+		return self.clone(order=self.order + 1)
+
+	def derivative(self):
+		# B'_n(x) = (B_{n-1}(x) ± B_{n+1}(x))/2, with the sign set by the Bessel kind; the scale factor brings down a factor of `scale`.
+		if self.name in ('J', 'Y'):
+			ampl_minus, ampl_plus = 1, -1
+		elif self.name == 'I':
+			ampl_minus, ampl_plus = 1, 1
+		elif self.name == 'K':
+			ampl_minus, ampl_plus = -1, -1
+		return (ampl_plus * self.scale / 2) * self.increased_order() + (ampl_minus * self.scale / 2) * self.reduced_order()
+
+	def sympy_output(self):
+		x = self.sympy_var
+		bessel_map = {'J': bessel.besselj, 'Y': bessel.bessely, 'I': bessel.besseli, 'K': bessel.besselk}
+		return sym.sympify(self.ampl) * bessel_map[self.name](self.order, sym.sympify(self.scale) * x)
 
 
 ################

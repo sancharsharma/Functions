@@ -134,7 +134,7 @@ F_zero = z.integrate()
 assert isinstance(F_zero, ZeroFunc), "ZeroFunc antiderivative"
 assert F_zero(2.0) == 0, "ZeroFunc antiderivative evaluates to 0"
 
-# ConstFunc.integrate() → c·x  (evaluates as ProdOfFuncs with CoordPow)
+# ConstFunc.integrate() → c·x  (a PowFunc with power=1, ampl=c)
 F_const = c.integrate()
 assert abs(F_const(3.0) - 9.0) < 1e-12, "ConstFunc antiderivative: 3·x at x=3 = 9"
 

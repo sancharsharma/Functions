@@ -86,8 +86,8 @@ python3 -m pytest tests/
 
 | Module | Contents |
 |--------|----------|
-| `Functions_Base/` | `FuncBase` base class (`func_base.py`); `ZeroFunc`, `ConstFunc`, `CoordPow`, `TrigCoord` (`leaves.py`); `SumOfFuncs`, `ProdOfFuncs`, `RatioOfFuncs`, `ComposedFunc`, `VecFunc` (`combinators.py`) |
-| `Functions_1D.py` | `Funcs1D`, `ExpFunc`, `PowFunc`, `PolyFunc`, `SumOfExps` |
+| `Functions_Base/` | `FuncBase` base class (`func_base.py`); `ZeroFunc`, `ConstFunc`, `Embed1D` (`leaves.py`); `SumOfFuncs`, `ProdOfFuncs`, `RatioOfFuncs`, `ComposedFunc`, `VecFunc` (`combinators.py`) |
+| `Functions_1D.py` | `Funcs1D`, `ExpFunc`, `PowFunc`, `Sin`, `Cos`, `PolyFunc`, `SumOfExps` |
 | `Functions_2D.py` | `Funcs2D`, `Exp2D`, `PolarPower`, `PolarBessel` |
 | `Functions_3D.py` | `Funcs3D`, `Exp3D`, `Cylindrical`, `PowerCylindrical` |
 | `CoordSystems.py` | `CoordSystem`, `CoordPoint`; pre-built: `Cartesian2D/3D`, `Cylindrical3D`, `Polar2D/3D`, `Cylindrical2D` |
@@ -124,7 +124,7 @@ python3 -m pytest tests/
 Several classes collapse degenerate cases at construction time, e.g.
 
 - `ConstFunc(0)` → `ZeroFunc`
-- `CoordPow(..., power=0)` → `ConstFunc(1)`
+- `PowFunc(power=0)` → `ConstFunc(ampl)`; `Embed1D(ConstFunc(c), …)` → `ConstFunc(c)`
 - `ExpFunc(k, ampl=0)` → `ZeroFunc`; `ExpFunc(k=0)` → `ConstFunc`
 - single-term `SumOfExps([c], [k])` → `ExpFunc`
 - `SumOfFuncs([f])` → `f`
@@ -135,7 +135,7 @@ Several classes collapse degenerate cases at construction time, e.g.
 
 ## Coordinate systems
 
-What makes the differential operators above work in curvilinear coordinates is that a `CoordSystem` is *pure geometry*: it carries only a name, the coordinate names (`['rho', 'phi', 'z']`), and the inverse scale factors `1/h_i` which are themselves `FuncBase` objects, so e.g. cylindrical's `1/h_phi = 1/rho` is a `CoordPow`. The operators (`gradient`/`divergence`/`laplacian`) live on the functions and read this metric data, so they reduce to the familiar Cartesian forms whenever the scale factors are all 1, and otherwise pick up the right `1/rho`, `1/(r sin θ)`, … factors automatically. Pre-built systems: `Cartesian2D/3D`, `Cylindrical3D`, `Cylindrical2D`, `Polar2D`, `Polar3D` (spherical). Coordinate conversions are supported.
+What makes the differential operators above work in curvilinear coordinates is that a `CoordSystem` is *pure geometry*: it carries only a name, the coordinate names (`['rho', 'phi', 'z']`), and the inverse scale factors `1/h_i` which are themselves `FuncBase` objects, so e.g. cylindrical's `1/h_phi = 1/rho` is an `Embed1D(PowFunc(power=-1))`. The operators (`gradient`/`divergence`/`laplacian`) live on the functions and read this metric data, so they reduce to the familiar Cartesian forms whenever the scale factors are all 1, and otherwise pick up the right `1/rho`, `1/(r sin θ)`, … factors automatically. Pre-built systems: `Cartesian2D/3D`, `Cylindrical3D`, `Cylindrical2D`, `Polar2D`, `Polar3D` (spherical). Coordinate conversions are supported.
 
 ## Adding a new function class
 

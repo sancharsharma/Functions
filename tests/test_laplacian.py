@@ -62,3 +62,29 @@ def test_polar_bessel_is_helmholtz_eigenfunction():
 	# J_m(k·r)·e^{imφ} satisfies ∇²f = −k²·f in 2D (analytically, no finite differences).
 	f = F.PolarBessel(m_azim=1, bessel=["J", 1, 0.9], ampl=1.0)
 	assert max_abs_err(f.laplacian(F.Polar2D)(PTS_2D), -0.9**2 * f(PTS_2D)) < 1e-9
+
+
+# A modified-Bessel mode I_m(kρ)·e^{imφ}·e^{ikz} (or with K_m) is a separated solution of
+# Laplace's equation ∇²f = 0 in cylindrical coordinates when scale = kz and order = m_azim.
+# Reason: the radial operator (1/ρ)∂_ρ(ρ∂_ρ)B_n(sρ) = (n²/ρ² + s²)·B_n(sρ) for modified Bessel
+# B_n (using x²B″ + xB′ − (x²+n²)B = 0), while (1/ρ²)∂_φ² = −m²/ρ² and ∂_z² = −kz². Summing gives
+# (n²−m²)/ρ² + (s²−kz²), which vanishes identically iff n=±m and s=±kz. The analytic laplacian()
+# object does not algebraically collapse to ZeroFunc (the cancellation needs a Bessel recurrence
+# that simplify() doesn't apply), so we cross-check the value at sample points — as elsewhere here.
+@pytest.mark.parametrize("bessel_name", ["I", "K"])
+@pytest.mark.parametrize("kz, m_azim", [(3, 2), (2, 0), (1, 3)])
+def test_cylindrical_modified_bessel_is_harmonic(bessel_name, kz, m_azim):
+	f = F.Cylindrical(kz=kz, m_azim=m_azim, bessel=[bessel_name, m_azim, kz], ampl=1)
+	lap = f.laplacian(F.Cylindrical3D)
+	assert max_abs_err(lap(PTS_3D), np.zeros(len(PTS_3D))) < 1e-9
+
+
+@pytest.mark.parametrize("bessel_name", ["J", "Y"])
+def test_cylindrical_ordinary_bessel_is_not_harmonic(bessel_name):
+	# Contrast: ordinary Bessel with the same scale=kz, order=m_azim solves Helmholtz (∇²f = −2kz²·f)
+	# under the same substitution, so its Laplacian is decidedly non-zero — this guards against the
+	# harmonic test passing for a trivial/degenerate reason.
+	kz, m_azim = 3, 2
+	f = F.Cylindrical(kz=kz, m_azim=m_azim, bessel=[bessel_name, m_azim, kz], ampl=1)
+	lap = f.laplacian(F.Cylindrical3D)
+	assert max_abs_err(lap(PTS_3D), -2 * kz**2 * f(PTS_3D)) < 1e-9

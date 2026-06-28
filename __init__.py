@@ -1,10 +1,10 @@
 from .Functions_Base import (
 	FuncBase, ZeroFunc, ConstFunc,
-	SumOfFuncs, ProdOfFuncs, RatioOfFuncs, ComposedFunc, VecFunc,
-	CoordPow, TrigCoord,
+	SumOfFuncs, ProdOfFuncs, RatioOfFuncs, ComposedFunc, VecFunc, SeparableFunc,
+	Embed1D,
 	as_scalar, scalar_factor, combine_domains,
 )
-from .Functions_1D import Funcs1D, ExpFunc, PowFunc, PolyFunc, SumOfExps
+from .Functions_1D import Funcs1D, ExpFunc, PowFunc, Sin, Cos, PolyFunc, SumOfExps, Bessel1D
 from .Functions_2D import Funcs2D, Exp2D, PolarPower, PolarBessel
 from .Functions_3D import Funcs3D, Exp3D, Cylindrical, PowerCylindrical
 from .CoordSystems import (
@@ -17,9 +17,9 @@ from .CoordSystems import (
 
 __all__ = [
 	'FuncBase', 'ZeroFunc', 'ConstFunc',
-	'SumOfFuncs', 'ProdOfFuncs', 'RatioOfFuncs', 'ComposedFunc', 'VecFunc',
-	'CoordPow', 'TrigCoord', 'as_scalar', 'scalar_factor', 'combine_domains',
-	'Funcs1D', 'ExpFunc', 'PowFunc', 'PolyFunc', 'SumOfExps',
+	'SumOfFuncs', 'ProdOfFuncs', 'RatioOfFuncs', 'ComposedFunc', 'VecFunc', 'SeparableFunc',
+	'Embed1D', 'as_scalar', 'scalar_factor', 'combine_domains',
+	'Funcs1D', 'ExpFunc', 'PowFunc', 'Sin', 'Cos', 'PolyFunc', 'SumOfExps', 'Bessel1D',
 	'Funcs2D', 'Exp2D', 'PolarPower', 'PolarBessel',
 	'Funcs3D', 'Exp3D', 'Cylindrical', 'PowerCylindrical',
 	'CoordSystem', 'CoordPoint', 'register_conversion',

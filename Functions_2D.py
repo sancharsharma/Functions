@@ -1,9 +1,7 @@
 import numpy as np
-import scipy.special as spec
-import sympy as sym
 from . import Functions_Base as _base
 from . import CoordSystems as _coords
-import sympy.functions.special.bessel as bessel
+from .Functions_1D import ExpFunc, PowFunc, Bessel1D
 
 _KNOWN_COORDS = frozenset({'x', 'y', 'rho', 'phi', 'r'})
 
@@ -76,7 +74,7 @@ class Funcs2D(_base.FuncBase):
 
 ################
 # The function ampl * e^(i*k_vec·pos) in 2D Cartesian coordinates.
-class Exp2D(Funcs2D):
+class Exp2D(_base._SeparableMixin, Funcs2D):
 
 	coord_sys = _coords.Cartesian2D
 
@@ -91,36 +89,19 @@ class Exp2D(Funcs2D):
 		self.ampl = ampl
 		self.parameters = {'k_vec': self.k_vec, 'ampl': ampl, 'domain': domain}
 
-	def _eval(self, pos_arr):
-		phase = np.dot(pos_arr, self.k_vec)
-		return self.ampl * np.exp(1j * phase)
+	def _factors(self):
+		# Separable: e^(i·kx·x) · e^(i·ky·y), one factor per [x, y].
+		return [ExpFunc(k=1j * ki) for ki in self.k_vec]
 
 	def __add__(self, other):
 		if isinstance(other, Exp2D) and np.array_equal(self.k_vec, other.k_vec):
 			return Exp2D(self.k_vec, ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
-	def _deriv_x(self):
-		return self.clone(ampl=1j * self.k_vec[0] * self.ampl)
-
-	def _deriv_y(self):
-		return self.clone(ampl=1j * self.k_vec[1] * self.ampl)
-
-	def sympy_output(self):
-		x, y = sym.symbols('x y', real=True)
-		phase = sum((ki*ci for ki, ci in zip(self.k_vec, [x, y])), sym.S.Zero)
-		return self.ampl * sym.exp(sym.I * phase)
-
 
 ################
 # The function ampl * r^power * e^(i*m_azim*phi) in 2D polar coordinates.
-class PolarPower(Funcs2D):
+class PolarPower(_base._SeparableMixin, Funcs2D):
 
 	coord_sys = _coords.Polar2D
 
@@ -136,20 +117,9 @@ class PolarPower(Funcs2D):
 		self.ampl = ampl
 		self.parameters = {'m_azim': m_azim, 'power': power, 'ampl': ampl, 'domain': domain}
 
-	def _eval(self, pos_arr):
-		r_out    = pos_arr[:, 0] ** self.power
-		azim_out = np.exp(1j * self.m_azim * pos_arr[:, 1])
-		return self.ampl * r_out * azim_out
-
-	def _deriv_r(self):
-		if self.power == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=2)
-		return self.clone(power=self.power - 1, ampl=self.power * self.ampl)
-
-	def _deriv_phi(self):
-		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=2)
-		return 1j * self.m_azim * self
+	def _factors(self):
+		# Separable: r^power · e^(i·m·phi), one factor per [r, phi].
+		return [PowFunc(self.power), ExpFunc(k=1j * self.m_azim)]
 
 	def _gradient_component(self, coord):
 		if coord == 'phi':
@@ -166,21 +136,11 @@ class PolarPower(Funcs2D):
 							  ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
-	def sympy_output(self):
-		r, phi = sym.symbols('r phi', real=True)
-		return self.ampl * r**self.power * sym.exp(sym.I*self.m_azim*phi)
-
 
 ################
 # The function ampl * bess_fn(scale*r) * e^(i*m_azim*phi) in 2D polar coordinates.
 # bessel = [fn, order, scale] where fn in {'J','Y','I','K'} and the radial part is fn(order, scale*r).
-class PolarBessel(Funcs2D):
+class PolarBessel(_base._SeparableMixin, Funcs2D):
 
 	coord_sys = _coords.Polar2D
 
@@ -201,38 +161,9 @@ class PolarBessel(Funcs2D):
 						   'bessel': [self.bessel_name, self.order, self.scale],
 						   'ampl': ampl, 'domain': domain}
 
-		match bessel[0]:
-			case 'J':
-				self.bess_fn = spec.jv
-			case 'Y':
-				self.bess_fn = spec.yn if isinstance(self.order, int) else spec.yv
-			case 'I':
-				self.bess_fn = spec.iv
-			case 'K':
-				self.bess_fn = spec.kn if isinstance(self.order, int) else spec.kv
-			case _:
-				raise ValueError(f"Unknown Bessel function '{bessel[0]}', expected one of 'J', 'Y', 'I', 'K'")
-
-	def _eval(self, pos_arr):
-		bess_out = self.bess_fn(self.order, self.scale*pos_arr[:, 0])
-		azim_out = np.exp(1j*self.m_azim*pos_arr[:, 1])
-		return self.ampl*bess_out*azim_out
-
-	def _deriv_r(self):
-		if self.bessel_name in ['J', 'Y']:
-			ampl_minus, ampl_plus = 1, -1
-		elif self.bessel_name == 'I':
-			ampl_minus, ampl_plus = 1, 1
-		elif self.bessel_name == 'K':
-			ampl_minus, ampl_plus = -1, -1
-		else:
-			raise ValueError(f"Unknown Bessel function: {self.bessel_name}")
-		return (ampl_plus*self.scale/2)*self.increased_order() + (ampl_minus*self.scale/2)*self.reduced_order()
-
-	def _deriv_phi(self):
-		if self.m_azim == 0:
-			return _base.ZeroFunc(domain=self.domain, input_dim=2)
-		return 1j * self.m_azim * self
+	def _factors(self):
+		# Separable: Bessel(scale·r) · e^(i·m·phi), one factor per [r, phi].
+		return [Bessel1D(self.bessel_name, self.order, self.scale), ExpFunc(k=1j * self.m_azim)]
 
 	def _gradient_component(self, coord):
 		if coord == 'phi':
@@ -265,20 +196,8 @@ class PolarBessel(Funcs2D):
 							   ampl=self.ampl + other.ampl, domain=_base.combine_domains(self, other))
 		return super().__add__(other)
 
-	def __mul__(self, other):
-		val = _base.scalar_factor(other)
-		if val is not None:
-			return self.clone(ampl=val * self.ampl)
-		return super().__mul__(other)
-
 	def reduced_order(self):
 		return self.clone(bessel=[self.bessel_name, self.order - 1, self.scale])
 
 	def increased_order(self):
 		return self.clone(bessel=[self.bessel_name, self.order + 1, self.scale])
-
-	def sympy_output(self):
-		r, phi = sym.symbols('r phi', real=True)
-		bessel_map = {'J': bessel.besselj, 'Y': bessel.bessely, 'I': bessel.besseli, 'K': bessel.besselk}
-		fun = bessel_map[self.bessel_name]
-		return self.ampl * fun(self.order, self.scale*r) * sym.exp(sym.I*self.m_azim*phi)

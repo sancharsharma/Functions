@@ -18,7 +18,8 @@ def test_new_collapse_rules():
 	assert isinstance(F.ExpFunc(k=1.0, ampl=0), F.ZeroFunc)
 	assert isinstance(F.ExpFunc(k=0, ampl=3.0), F.ConstFunc)
 	assert isinstance(F.SumOfExps([2.0], [1.0]), F.ExpFunc)          # single term collapses
-	assert isinstance(F.CoordPow(input_dim=3, coord_index=0, power=0), F.ConstFunc)
+	assert isinstance(F.PowFunc(power=0, ampl=3.0), F.ConstFunc)     # x^0 collapses to a constant
+	assert isinstance(F.Embed1D(F.PowFunc(power=0), input_dim=3, coord_index=0), F.ConstFunc)
 	# 2D leaf classes collapse to ZeroFunc at zero amplitude, like their 3D analogues.
 	assert isinstance(F.Exp2D([0.5, -0.3], ampl=0), F.ZeroFunc)
 	assert isinstance(F.PolarPower(m_azim=2, power=3, ampl=0), F.ZeroFunc)
@@ -101,7 +102,7 @@ def test_operator_identities():
 	f = F.PolyFunc([1.0, 2.0, 3.0])
 	assert (f + 0) is f                       # additive identity (base __add__ path)
 	# multiplicative identity: leaf __mul__ folds scalars, so test a base-__mul__ class
-	cp = F.CoordPow(input_dim=3, coord_index=0, power=2, coord_name="rho")
+	cp = F.Embed1D(F.PowFunc(power=2), input_dim=3, coord_index=0, coord_name="rho")
 	assert (cp * 1) is cp
 	with pytest.raises(ZeroDivisionError):
 		1 / F.ZeroFunc(input_dim=1)
